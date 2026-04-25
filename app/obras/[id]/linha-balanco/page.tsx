@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { createClient } from '@supabase/supabase-js';
 
@@ -33,7 +33,7 @@ interface PavimentoComAtividades extends Pavimento {
   atividades: Atividade[];
 }
 
-// Paleta de cores para cada atividade (por nome)
+// Paleta de cores para cada atividade
 const CORES_ATIVIDADES: Record<string, string> = {};
 const PALETTE = [
   '#3B82F6', '#10B981', '#F59E0B', '#EF4444',
@@ -74,6 +74,13 @@ const toDateStr = (date: Date): string => {
   return date.toISOString().split('T')[0];
 };
 
+interface DragState {
+  atividade: Atividade;
+  pavimento: Pavimento;
+  startX: number;
+  startDia: number;
+}
+
 export default function LinhaDeBalanco() {
   const params = useParams();
   const router = useRouter();
@@ -88,6 +95,10 @@ export default function LinhaDeBalanco() {
     x: number;
     y: number;
   } | null>(null);
+  const [dragState, setDragState] = useState<DragState | null>(null);
+  const [atualizando, setAtualizando] = useState(false);
+  const [mensagem, setMensagem] = useState<{ tipo: 'success' | 'error'; texto: string } | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const supabase = useMemo(() => {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -104,7 +115,6 @@ export default function LinhaDeBalanco() {
     try {
       setLoading(true);
 
-      // Buscar obra
       const { data: obraData, error: obraError } = await supabase
         .from('obras')
         .select('*')
@@ -114,7 +124,6 @@ export default function LinhaDeBalanco() {
       if (obraError || !obraData) return;
       setObra(obraData);
 
-      // Buscar pavimentos
       const { data: pavimentosData, error: pavimentosError } = await supabase
         .from('pavimentos')
         .select('*')
@@ -123,7 +132,6 @@ export default function LinhaDeBalanco() {
 
       if (pavimentosError || !pavimentosData) return;
 
-      // Buscar atividades de cada pavimento
       const pavimentosCompletos: PavimentoComAtividades[] = await Promise.all(
         pavimentosData.map(async (pav) => {
           const { data: atividadesData } = await supabase
@@ -147,7 +155,6 @@ export default function LinhaDeBalanco() {
     }
   };
 
-  // Calcular intervalo total de datas
   const { dataMinima, dataMaxima, totalDias } = useMemo(() => {
     const todasAtividades = pavimentosComAtividades.flatMap((p) => p.atividades);
 
@@ -168,7 +175,6 @@ export default function LinhaDeBalanco() {
     const min = new Date(Math.min(...datas.map((d) => d.getTime())));
     const max = new Date(Math.max(...datas.map((d) => d.getTime())));
 
-    // Adicionar margem de 5 dias em cada lado
     const minComMargem = addDias(min, -5);
     const maxComMargem = addDias(max, 5);
 
@@ -179,7 +185,6 @@ export default function LinhaDeBalanco() {
     };
   }, [pavimentosComAtividades]);
 
-  // Gerar marcadores de tempo no eixo X
   const marcadoresTempo = useMemo(() => {
     const marcadores = [];
     const intervaloDias = totalDias <= 60 ? 7 : totalDias <= 180 ? 14 : 30;
@@ -194,7 +199,6 @@ export default function LinhaDeBalanco() {
     return marcadores;
   }, [dataMinima, totalDias]);
 
-  // Verificar conflitos (mesma equipe em pavimentos diferentes no mesmo período)
   const conflitos = useMemo(() => {
     const conflitosEncontrados: Set<number> = new Set();
     const todasAtividades = pavimentosComAtividades.flatMap((p) =>
@@ -212,7 +216,6 @@ export default function LinhaDeBalanco() {
           const bInicio = parseDate(b.data_inicio);
           const bFim = parseDate(b.data_fim);
 
-          // Verificar sobreposição de datas
           if (aInicio <= bFim && aFim >= bInicio) {
             conflitosEncontrados.add(a.id);
             conflitosEncontrados.add(b.id);
@@ -222,6 +225,127 @@ export default function LinhaDeBalanco() {
     }
     return conflitosEncontrados;
   }, [pavimentosComAtividades]);
+
+  // Handler de início de drag
+  const handleMouseDown = (e: React.MouseEvent, atividade: Atividade, pavimento: Pavimento) => {
+    if (atualizando) return;
+    
+    e.preventDefault();
+    const startX = e.clientX;
+    const startDia = diffDias(dataMinima, parseDate(atividade.data_inicio));
+
+    setDragState({
+      atividade,
+      pavimento,
+      startX,
+      startDia,
+    });
+  };
+
+  // Handler de movimento do mouse
+  useEffect(() => {
+    if (!dragState || !containerRef.current) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!dragState) return;
+
+      const deltaX = e.clientX - dragState.startX;
+      const pixelsPorDia = containerRef.current
+        ? (containerRef.current.offsetWidth - 160) / totalDias
+        : 10;
+      const deltasDias = Math.round(deltaX / pixelsPorDia);
+      const novoDia = Math.max(0, dragState.startDia + deltasDias);
+
+      // Mostrar preview
+      if (dragState) {
+        const novaData = addDias(dataMinima, novoDia);
+        const duracao = diffDias(
+          parseDate(dragState.atividade.data_inicio),
+          parseDate(dragState.atividade.data_fim)
+        );
+        const dataFim = addDias(novaData, duracao);
+
+        setTooltip({
+          atividade: {
+            ...dragState.atividade,
+            data_inicio: toDateStr(novaData),
+            data_fim: toDateStr(dataFim),
+          },
+          pavimento: dragState.pavimento,
+          x: e.clientX,
+          y: e.clientY,
+        });
+      }
+    };
+
+    const handleMouseUp = async (e: MouseEvent) => {
+      if (!dragState) return;
+
+      const deltaX = e.clientX - dragState.startX;
+      const pixelsPorDia = containerRef.current
+        ? (containerRef.current.offsetWidth - 160) / totalDias
+        : 10;
+      const deltasDias = Math.round(deltaX / pixelsPorDia);
+
+      if (Math.abs(deltasDias) < 1) {
+        setDragState(null);
+        setTooltip(null);
+        return; // Sem movimento significativo
+      }
+
+      // Atualizar no banco de dados
+      setAtualizando(true);
+      try {
+        const novaDataInicio = addDias(parseDate(dragState.atividade.data_inicio), deltasDias);
+        const duracao = diffDias(
+          parseDate(dragState.atividade.data_inicio),
+          parseDate(dragState.atividade.data_fim)
+        );
+        const novaDataFim = addDias(novaDataInicio, duracao);
+
+        const { error } = await supabase
+          .from('atividades')
+          .update({
+            data_inicio: toDateStr(novaDataInicio),
+            data_fim: toDateStr(novaDataFim),
+          })
+          .eq('id', dragState.atividade.id);
+
+        if (error) {
+          setMensagem({
+            tipo: 'error',
+            texto: '❌ Erro ao atualizar atividade',
+          });
+        } else {
+          setMensagem({
+            tipo: 'success',
+            texto: `✅ ${dragState.atividade.nome} movida para ${novaDataInicio.toLocaleDateString('pt-BR')}`,
+          });
+          await fetchTodosOsDados();
+        }
+      } catch (error) {
+        setMensagem({
+          tipo: 'error',
+          texto: '❌ Erro ao atualizar',
+        });
+      } finally {
+        setAtualizando(false);
+        setDragState(null);
+        setTooltip(null);
+
+        // Limpar mensagem após 3 segundos
+        setTimeout(() => setMensagem(null), 3000);
+      }
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [dragState, dataMinima, totalDias, supabase]);
 
   const totalAtividades = pavimentosComAtividades.reduce(
     (acc, p) => acc + p.atividades.length, 0
@@ -273,7 +397,6 @@ export default function LinhaDeBalanco() {
               </div>
             </div>
 
-            {/* Stats */}
             <div className="flex items-center gap-6">
               <div className="text-center">
                 <p className="text-2xl font-bold text-blue-600">{pavimentosComAtividades.length}</p>
@@ -287,18 +410,25 @@ export default function LinhaDeBalanco() {
                 <p className="text-2xl font-bold text-orange-600">{totalDias}</p>
                 <p className="text-xs text-slate-500">Dias totais</p>
               </div>
-              {conflitos.size > 0 && (
-                <div className="text-center bg-red-50 border border-red-200 rounded-lg px-3 py-1">
-                  <p className="text-xl font-bold text-red-600">{conflitos.size}</p>
-                  <p className="text-xs text-red-500">⚠️ Conflitos</p>
-                </div>
-              )}
             </div>
           </div>
         </div>
       </header>
 
       <main className="max-w-full px-6 py-6">
+        {/* Mensagem de feedback */}
+        {mensagem && (
+          <div
+            className={`mb-6 p-4 rounded-lg border ${
+              mensagem.tipo === 'success'
+                ? 'bg-green-50 border-green-200 text-green-800'
+                : 'bg-red-50 border-red-200 text-red-800'
+            }`}
+          >
+            {mensagem.texto}
+          </div>
+        )}
+
         {/* Legenda */}
         {totalAtividades > 0 && (
           <div className="bg-white rounded-lg border border-slate-200 p-4 mb-6">
@@ -310,12 +440,6 @@ export default function LinhaDeBalanco() {
                   <span className="text-sm text-slate-700">{nome}</span>
                 </div>
               ))}
-              {conflitos.size > 0 && (
-                <div className="flex items-center gap-2 ml-4 pl-4 border-l border-slate-200">
-                  <div className="w-4 h-4 rounded border-2 border-red-500 bg-red-100"></div>
-                  <span className="text-sm text-red-600 font-medium">⚠️ Conflito de equipe</span>
-                </div>
-              )}
             </div>
           </div>
         )}
@@ -334,7 +458,7 @@ export default function LinhaDeBalanco() {
             </button>
           </div>
         ) : (
-          <div className="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden">
+          <div className="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden" ref={containerRef}>
             {/* Cabeçalho do gráfico */}
             <div className="p-4 border-b border-slate-200 bg-slate-50">
               <p className="text-sm text-slate-600">
@@ -348,11 +472,9 @@ export default function LinhaDeBalanco() {
               <div style={{ minWidth: `${Math.max(800, totalDias * 8)}px` }}>
                 {/* Eixo X (datas) */}
                 <div className="flex border-b border-slate-200 bg-slate-50">
-                  {/* Coluna dos nomes dos pavimentos */}
                   <div className="w-40 min-w-40 border-r border-slate-200 px-3 py-2 flex items-center">
                     <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Pavimento</span>
                   </div>
-                  {/* Marcadores de datas */}
                   <div className="flex-1 relative h-8">
                     {marcadoresTempo.map((m, i) => (
                       <div
@@ -410,23 +532,33 @@ export default function LinhaDeBalanco() {
                         return (
                           <div
                             key={atividade.id}
-                            className="absolute top-2 bottom-2 rounded flex items-center px-2 cursor-pointer transition-opacity hover:opacity-90"
+                            className={`absolute top-2 bottom-2 rounded flex items-center px-2 cursor-grab active:cursor-grabbing transition-all ${
+                              atualizando ? 'opacity-50' : 'hover:opacity-90'
+                            }`}
                             style={{
                               left: `${leftPercent}%`,
                               width: `${widthPercent}%`,
                               backgroundColor: cor,
                               border: temConflito ? '2px solid #EF4444' : 'none',
                               minWidth: '20px',
+                              userSelect: 'none',
                             }}
+                            onMouseDown={(e) => handleMouseDown(e, atividade, pavimento)}
                             onMouseEnter={(e) => {
-                              setTooltip({
-                                atividade,
-                                pavimento,
-                                x: e.clientX,
-                                y: e.clientY,
-                              });
+                              if (!dragState) {
+                                setTooltip({
+                                  atividade,
+                                  pavimento,
+                                  x: e.clientX,
+                                  y: e.clientY,
+                                });
+                              }
                             }}
-                            onMouseLeave={() => setTooltip(null)}
+                            onMouseLeave={() => {
+                              if (!dragState) {
+                                setTooltip(null);
+                              }
+                            }}
                           >
                             <span className="text-white text-xs font-semibold truncate drop-shadow">
                               {atividade.nome}
@@ -445,26 +577,15 @@ export default function LinhaDeBalanco() {
           </div>
         )}
 
-        {/* Alerta de conflitos */}
-        {conflitos.size > 0 && (
-          <div className="mt-6 bg-red-50 border border-red-200 rounded-lg p-4">
-            <h3 className="font-semibold text-red-800 mb-2">⚠️ Conflitos de Equipe Detectados</h3>
-            <p className="text-sm text-red-700">
-              A mesma equipe está alocada em dois ou mais pavimentos ao mesmo tempo.
-              As atividades com borda vermelha no gráfico indicam onde ocorrem os conflitos.
-              Ajuste as datas para resolver o problema.
-            </p>
-          </div>
-        )}
-
         {/* Info do Projeto */}
         <div className="mt-6 bg-blue-50 border border-blue-200 rounded-lg p-4">
           <h3 className="font-semibold text-blue-900 mb-2">📌 Como usar este gráfico</h3>
           <ul className="text-sm text-blue-800 space-y-1">
-            <li>🖱️ <strong>Passe o mouse</strong> sobre uma barra para ver os detalhes da atividade</li>
-            <li>⚠️ <strong>Borda vermelha</strong> indica conflito de equipe (mesma equipe, datas sobrepostas)</li>
+            <li>🖱️ <strong>Clique e arraste</strong> uma barra para reprogramar a atividade</li>
+            <li>📅 <strong>A duração permanece</strong> a mesma, apenas muda a data de início</li>
+            <li>✅ <strong>Salva automaticamente</strong> no banco de dados</li>
+            <li>⚠️ <strong>Borda vermelha</strong> indica conflito de equipe</li>
             <li>↔️ <strong>Scroll horizontal</strong> para navegar por obras longas</li>
-            <li>🎨 <strong>Cores</strong> representam cada tipo de atividade</li>
           </ul>
         </div>
       </main>
@@ -476,7 +597,7 @@ export default function LinhaDeBalanco() {
           style={{
             left: tooltip.x + 16,
             top: tooltip.y - 80,
-            minWidth: '220px',
+            minWidth: '240px',
           }}
         >
           <p className="font-bold text-slate-900 text-base mb-2">{tooltip.atividade.nome}</p>
@@ -484,13 +605,23 @@ export default function LinhaDeBalanco() {
             <p>🏢 <strong>Pavimento:</strong> {tooltip.pavimento.nome}</p>
             <p>📅 <strong>Início:</strong> {formatDate(tooltip.atividade.data_inicio)}</p>
             <p>📅 <strong>Fim:</strong> {formatDate(tooltip.atividade.data_fim)}</p>
-            <p>⏱️ <strong>Duração:</strong> {tooltip.atividade.duracao_dias || diffDias(parseDate(tooltip.atividade.data_inicio), parseDate(tooltip.atividade.data_fim)) + 1} dias</p>
+            <p>⏱️ <strong>Duração:</strong> {diffDias(parseDate(tooltip.atividade.data_inicio), parseDate(tooltip.atividade.data_fim)) + 1} dias</p>
             {tooltip.atividade.equipe && (
               <p>👥 <strong>Equipe:</strong> {tooltip.atividade.equipe}</p>
             )}
-            {conflitos.has(tooltip.atividade.id) && (
-              <p className="text-red-600 font-semibold mt-2">⚠️ Conflito de equipe detectado!</p>
-            )}
+          </div>
+          {dragState && (
+            <p className="text-blue-600 font-semibold mt-2 text-xs">🔄 Arrastando...</p>
+          )}
+        </div>
+      )}
+
+      {/* Overlay de carregamento */}
+      {atualizando && (
+        <div className="fixed inset-0 bg-black/20 flex items-center justify-center z-40">
+          <div className="bg-white rounded-lg p-6 shadow-xl">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-3"></div>
+            <p className="text-slate-600 font-medium">Atualizando...</p>
           </div>
         </div>
       )}
