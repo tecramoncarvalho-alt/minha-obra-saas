@@ -39,6 +39,10 @@ export default function PavimentoDetalhes() {
     equipe: '',
   });
 
+  // Exclusão de atividade
+  const [atividadeParaExcluir, setAtividadeParaExcluir] = useState<Atividade | null>(null);
+  const [excluindo, setExcluindo] = useState(false);
+
   // Criar cliente Supabase uma única vez
   const supabase = useMemo(() => {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -152,6 +156,37 @@ export default function PavimentoDetalhes() {
       alert('❌ Erro ao criar atividade');
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  // ─── Exclusão de Atividade ───
+  const handleExcluirAtividade = async () => {
+    if (!atividadeParaExcluir) return;
+
+    setExcluindo(true);
+    try {
+      const { error } = await supabase
+        .from('atividades')
+        .delete()
+        .eq('id', atividadeParaExcluir.id);
+
+      if (error) {
+        alert('❌ Erro ao deletar atividade: ' + error.message);
+      } else {
+        setAtividadeParaExcluir(null);
+        setExcluindo(false);
+
+        // Aguardar um pouco e recarregar dados
+        await new Promise(resolve => setTimeout(resolve, 500));
+        await fetchPavimentoEAtividades();
+
+        alert('✅ Atividade excluída com sucesso!');
+      }
+    } catch (error) {
+      alert('❌ Erro durante exclusão: ' + String(error));
+    } finally {
+      setExcluindo(false);
+      setAtividadeParaExcluir(null);
     }
   };
 
@@ -330,12 +365,12 @@ export default function PavimentoDetalhes() {
                   {atividades.map((atividade) => (
                     <div
                       key={atividade.id}
-                      className="p-4 border border-slate-200 rounded-lg hover:border-blue-300 hover:bg-blue-50 transition-colors duration-200"
+                      className="p-4 border border-slate-200 rounded-lg hover:border-blue-300 hover:bg-blue-50 transition-colors group"
                     >
                       <div className="flex items-start justify-between">
                         <div className="flex-1">
                           <h3 className="font-semibold text-slate-900 text-base">{atividade.nome}</h3>
-                          
+
                           <div className="flex gap-4 mt-2 text-xs text-slate-500">
                             <span>📅 Início: {new Date(atividade.data_inicio).toLocaleDateString('pt-BR')}</span>
                             <span>📅 Fim: {new Date(atividade.data_fim).toLocaleDateString('pt-BR')}</span>
@@ -354,6 +389,14 @@ export default function PavimentoDetalhes() {
                             )}
                           </div>
                         </div>
+
+                        {/* Botão Excluir */}
+                        <button
+                          onClick={() => setAtividadeParaExcluir(atividade)}
+                          className="ml-4 px-3 py-1 bg-red-100 text-red-700 rounded text-sm font-medium hover:bg-red-200 transition-colors opacity-0 group-hover:opacity-100"
+                        >
+                          🗑️ Excluir
+                        </button>
                       </div>
                     </div>
                   ))}
@@ -369,11 +412,47 @@ export default function PavimentoDetalhes() {
           <ul className="text-sm text-blue-800 space-y-1">
             <li>✅ Você criou obras e pavimentos!</li>
             <li>✅ Agora criou atividades (você fez!)</li>
+            <li>✅ Pode excluir atividades individuais</li>
             <li>⏳ Visualizar a Linha de Balanço com todas as atividades</li>
             <li>⏳ Permitir reprogramações dinâmicas</li>
           </ul>
         </div>
       </main>
+
+      {/* Modal de Confirmação de Exclusão */}
+      {atividadeParaExcluir && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-2xl p-6 max-w-sm mx-4">
+            <div className="flex items-center gap-3 mb-4">
+              <span className="text-3xl">⚠️</span>
+              <h3 className="text-lg font-bold text-slate-900">Confirmar Exclusão</h3>
+            </div>
+            <p className="text-slate-600 mb-2">Você tem certeza que deseja excluir?</p>
+            <p className="text-slate-900 font-semibold mb-6 p-3 bg-slate-100 rounded-lg">
+              {atividadeParaExcluir.nome}
+            </p>
+            <p className="text-sm text-slate-500 mb-6">
+              ⚠️ Esta ação é irreversível.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setAtividadeParaExcluir(null)}
+                disabled={excluindo}
+                className="flex-1 px-4 py-2 border border-slate-300 text-slate-700 rounded-lg font-semibold hover:bg-slate-50 transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleExcluirAtividade}
+                disabled={excluindo}
+                className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-slate-300 text-white rounded-lg font-semibold transition-colors"
+              >
+                {excluindo ? '⏳ Excluindo...' : '🗑️ Excluir'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
