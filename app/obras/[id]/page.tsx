@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { createClient } from '@supabase/supabase-js';
 
@@ -11,6 +11,7 @@ interface Obra {
   descricao: string | null;
   data_inicio: string | null;
   data_fim: string | null;
+  foto_url: string | null;
   created_at: string;
 }
 
@@ -168,6 +169,14 @@ export default function ObraDetalhes() {
   const [blocoParaExcluir, setBlocoParaExcluir] = useState<string | null>(null);
   const [excluindoBloco, setExcluindoBloco] = useState(false);
 
+  // Edição da obra
+  const [modalEditarObra, setModalEditarObra] = useState(false);
+  const [formObra, setFormObra] = useState({ nome: '', descricao: '', data_inicio: '', data_fim: '' });
+  const [salvandoObra, setSalvandoObra] = useState(false);
+  const [excluindoObra, setExcluindoObra] = useState(false);
+  const [uploadandoFoto, setUploadandoFoto] = useState(false);
+  const fotoInputRef = useRef<HTMLInputElement>(null);
+
   // Accordion: blocos abertos na lista de pavimentos
   const [blocosAbertos, setBlocosAbertos] = useState<Set<string>>(new Set());
 
@@ -210,6 +219,94 @@ export default function ObraDetalhes() {
       setPavimentos(pavData || []);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // ─── Editar Obra ───
+  const abrirEditarObra = () => {
+    if (!obra) return;
+    setFormObra({
+      nome: obra.nome,
+      descricao: obra.descricao || '',
+      data_inicio: obra.data_inicio || '',
+      data_fim: obra.data_fim || '',
+    });
+    setModalEditarObra(true);
+  };
+
+  const handleSalvarObra = async () => {
+    if (!formObra.nome.trim()) return;
+    setSalvandoObra(true);
+    const { error } = await supabase.from('obras').update({
+      nome: formObra.nome.trim(),
+      descricao: formObra.descricao.trim() || null,
+      data_inicio: formObra.data_inicio || null,
+      data_fim: formObra.data_fim || null,
+    }).eq('id', obraId);
+    if (!error) {
+      setModalEditarObra(false);
+      await fetchObraEPavimentos();
+    } else {
+      alert('❌ Erro ao salvar: ' + error.message);
+    }
+    setSalvandoObra(false);
+  };
+
+  const handleExcluirObra = async () => {
+    if (!confirm(`Excluir a obra "${obra?.nome}"?\nEsta ação é irreversível e apagará todos os dados.`)) return;
+    setExcluindoObra(true);
+    try {
+      // Deletar manualmente em cascata
+      // 1. Subatividades
+      const { data: pavs } = await supabase.from('pavimentos').select('id').eq('obra_id', obraId);
+      const pavIds = (pavs || []).map(p => p.id);
+      if (pavIds.length > 0) {
+        const { data: ativs } = await supabase.from('atividades').select('id').in('pavimento_id', pavIds);
+        const ativIds = (ativs || []).map(a => a.id);
+        if (ativIds.length > 0) {
+          await supabase.from('subatividades').delete().in('atividade_id', ativIds);
+          await supabase.from('atividades').delete().in('pavimento_id', pavIds);
+        }
+      }
+      // 2. Versões
+      await supabase.from('versoes').delete().eq('obra_id', obraId);
+      // 3. Pavimentos
+      await supabase.from('pavimentos').delete().eq('obra_id', obraId);
+      // 4. Obra
+      const { error } = await supabase.from('obras').delete().eq('id', obraId);
+      if (!error) {
+        router.push('/');
+      } else {
+        alert('❌ Erro ao excluir obra: ' + error.message);
+        setExcluindoObra(false);
+      }
+    } catch (err) {
+      alert('❌ Erro: ' + String(err));
+      setExcluindoObra(false);
+    }
+  };
+
+  // ─── Upload de Foto ───
+  const handleFotoChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) { alert('❌ Foto muito grande! Máximo 2MB.'); return; }
+    setUploadandoFoto(true);
+    try {
+      const ext = file.name.split('.').pop();
+      const path = `obras/${obraId}/foto.${ext}`;
+      const { error: uploadError } = await supabase.storage
+        .from('fotos-obras').upload(path, file, { upsert: true });
+      if (uploadError) throw uploadError;
+      const { data: urlData } = supabase.storage.from('fotos-obras').getPublicUrl(path);
+      const fotoUrl = urlData.publicUrl + '?t=' + Date.now();
+      await supabase.from('obras').update({ foto_url: fotoUrl }).eq('id', obraId);
+      await fetchObraEPavimentos();
+    } catch (err) {
+      alert('❌ Erro ao fazer upload: ' + String(err));
+    } finally {
+      setUploadandoFoto(false);
+      if (fotoInputRef.current) fotoInputRef.current.value = '';
     }
   };
 
@@ -416,31 +513,62 @@ export default function ObraDetalhes() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
+      {/* Input oculto para foto */}
+      <input ref={fotoInputRef} type="file" accept="image/*" className="hidden" onChange={handleFotoChange} />
+
       {/* Header */}
       <header className="bg-white border-b border-slate-200 shadow-sm">
-        <div className="max-w-7xl mx-auto px-6 py-6">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <button onClick={() => router.push('/')} className="text-blue-600 hover:text-blue-700 font-semibold text-lg">
+        <div className="max-w-7xl mx-auto px-6 py-5">
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-4 flex-1 min-w-0">
+              <button onClick={() => router.push('/')} className="text-blue-600 hover:text-blue-700 font-semibold text-lg flex-shrink-0">
                 ← Voltar
               </button>
-              <div>
-                <h1 className="text-2xl font-bold text-slate-900">{obra.nome}</h1>
-                {obra.descricao && <p className="text-sm text-slate-500 mt-1">{obra.descricao}</p>}
+
+              {/* Foto da obra */}
+              <div
+                className="relative w-14 h-14 rounded-xl overflow-hidden flex-shrink-0 bg-slate-100 border-2 border-slate-200 cursor-pointer hover:border-blue-400 transition-colors group"
+                onClick={() => fotoInputRef.current?.click()}
+                title="Clique para alterar a foto"
+              >
+                {obra.foto_url ? (
+                  <img src={obra.foto_url} alt={obra.nome} className="w-full h-full object-cover" />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center text-2xl">🏗️</div>
+                )}
+                <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                  <span className="text-white text-xs font-bold">{uploadandoFoto ? '⏳' : '📷'}</span>
+                </div>
+              </div>
+
+              {/* Nome e descrição */}
+              <div className="min-w-0 flex-1">
+                <h1 className="text-3xl font-bold text-slate-900 truncate">{obra.nome}</h1>
+                {obra.descricao && <p className="text-sm text-slate-500 mt-0.5 truncate">{obra.descricao}</p>}
               </div>
             </div>
-            <button
-              onClick={() => router.push(`/obras/${obraId}/linha-balanco`)}
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-semibold transition-colors"
-            >
-              📊 Ver Linha de Balanço
-            </button>
-            <button
-               onClick={() => router.push(`/obras/${obraId}/dashboard`)}
-                className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-semibold transition-colors"
-            >
-              📊 Dashboard
-</button>
+
+            {/* Botões */}
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <button
+                onClick={abrirEditarObra}
+                className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-sm font-semibold transition-colors"
+              >
+                ✏️ Editar
+              </button>
+              <button
+                onClick={() => router.push(`/obras/${obraId}/dashboard`)}
+                className="px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-semibold transition-colors"
+              >
+                📋 Dashboard
+              </button>
+              <button
+                onClick={() => router.push(`/obras/${obraId}/linha-balanco`)}
+                className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-semibold transition-colors"
+              >
+                📊 Linha de Balanço
+              </button>
+            </div>
           </div>
         </div>
       </header>
@@ -992,6 +1120,83 @@ export default function ObraDetalhes() {
                 className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-slate-300 text-white rounded-lg font-semibold transition-colors"
               >
                 {excluindoBloco ? '⏳ Excluindo...' : '🗑️ Excluir Bloco'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Editar Obra */}
+      {modalEditarObra && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl shadow-2xl p-6 max-w-md w-full mx-4">
+            <h3 className="text-lg font-bold text-slate-900 mb-5">✏️ Editar Obra</h3>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-1">Nome *</label>
+                <input type="text" value={formObra.nome}
+                  onChange={e => setFormObra(p => ({ ...p, nome: e.target.value }))}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-slate-900" />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-1">Descrição</label>
+                <textarea value={formObra.descricao}
+                  onChange={e => setFormObra(p => ({ ...p, descricao: e.target.value }))}
+                  rows={3}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-slate-900" />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700 mb-1">Data Início</label>
+                  <input type="date" value={formObra.data_inicio}
+                    onChange={e => setFormObra(p => ({ ...p, data_inicio: e.target.value }))}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-slate-900" />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700 mb-1">Data Fim</label>
+                  <input type="date" value={formObra.data_fim}
+                    onChange={e => setFormObra(p => ({ ...p, data_fim: e.target.value }))}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-slate-900" />
+                </div>
+              </div>
+
+              {/* Foto */}
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">Foto da Obra</label>
+                <div className="flex items-center gap-3">
+                  <div className="w-16 h-16 rounded-lg overflow-hidden bg-slate-100 border border-slate-200 flex items-center justify-center flex-shrink-0">
+                    {obra?.foto_url
+                      ? <img src={obra.foto_url} alt="" className="w-full h-full object-cover" />
+                      : <span className="text-2xl">🏗️</span>
+                    }
+                  </div>
+                  <button type="button"
+                    onClick={() => { setModalEditarObra(false); setTimeout(() => fotoInputRef.current?.click(), 100); }}
+                    className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-sm font-semibold transition-colors"
+                  >
+                    {uploadandoFoto ? '⏳ Enviando...' : '📷 Alterar foto'}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex gap-3 mt-6">
+              {/* Excluir obra */}
+              <button
+                onClick={() => { setModalEditarObra(false); handleExcluirObra(); }}
+                disabled={excluindoObra || salvandoObra}
+                className="px-3 py-2 bg-red-100 hover:bg-red-200 text-red-700 rounded-lg font-semibold text-sm transition-colors"
+              >
+                {excluindoObra ? '⏳' : '🗑️ Excluir'}
+              </button>
+              <button onClick={() => setModalEditarObra(false)} disabled={salvandoObra}
+                className="flex-1 px-4 py-2 border border-slate-300 text-slate-700 rounded-lg font-semibold hover:bg-slate-50">
+                Cancelar
+              </button>
+              <button onClick={handleSalvarObra} disabled={salvandoObra || !formObra.nome.trim()}
+                className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white rounded-lg font-semibold">
+                {salvandoObra ? '⏳ Salvando...' : '💾 Salvar'}
               </button>
             </div>
           </div>
