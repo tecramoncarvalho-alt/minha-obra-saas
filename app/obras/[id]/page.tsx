@@ -19,6 +19,7 @@ interface Pavimento {
   obra_id: number;
   nome: string;
   numero: number | null;
+  observacao: string | null;
   created_at: string;
 }
 
@@ -39,6 +40,7 @@ interface Bloco {
   id: string;
   nome: string;
   tipo: string;
+  linhas: number;
   especiais: PavimentoEspecial[];
   repetidos: PavimentoRepetido[];
 }
@@ -59,6 +61,7 @@ const criarBloco = (): Bloco => ({
   id: newId(),
   nome: '',
   tipo: 'Torre',
+  linhas: 1,
   especiais: [
     criarEspecial('Subsolo', '-1'),
     criarEspecial('Térreo', '0'),
@@ -302,7 +305,7 @@ export default function ObraDetalhes() {
 
   const removeBloco = (id: string) => setBlocos((prev) => prev.filter((b) => b.id !== id));
 
-  const updateBloco = (id: string, campo: 'nome' | 'tipo', valor: string) =>
+  const updateBloco = (id: string, campo: 'nome' | 'tipo' | 'linhas', valor: string | number) =>
     setBlocos((prev) => prev.map((b) => (b.id === id ? { ...b, [campo]: valor } : b)));
 
   const toggleExpandido = (id: string) =>
@@ -366,12 +369,15 @@ export default function ObraDetalhes() {
 
     for (const bloco of blocos) {
       const pavs = gerarPavimentos(bloco);
-      for (const pav of pavs) {
+      const meta = `__BLOCO__tipo=${bloco.tipo}||obs=||linhas=${bloco.linhas}`;
+      for (let i = 0; i < pavs.length; i++) {
+        const pav = pavs[i];
         const nomeFinal = `${bloco.nome.trim()} - ${pav.nome}`;
         const { error } = await supabase.from('pavimentos').insert({
           obra_id: obraId,
           nome: nomeFinal,
           numero: pav.numero,
+          observacao: i === 0 ? meta : null,
         });
         if (!error) criados++;
       }
@@ -429,6 +435,12 @@ export default function ObraDetalhes() {
             >
               📊 Ver Linha de Balanço
             </button>
+            <button
+               onClick={() => router.push(`/obras/${obraId}/dashboard`)}
+                className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-semibold transition-colors"
+            >
+              📊 Dashboard
+</button>
           </div>
         </div>
       </header>
@@ -736,6 +748,28 @@ export default function ObraDetalhes() {
                               <p className="text-xs text-slate-400 -mt-2">
                                 O nome será prefixado: <strong>{bloco.nome || 'Bloco'} - Térreo</strong>, <strong>{bloco.nome || 'Bloco'} - Andar 2</strong>...
                               </p>
+
+                              {/* Linhas por pavimento */}
+                              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                                <label className="text-xs font-semibold text-blue-800 mb-2 block">📊 Linhas por Pavimento na Linha de Balanço</label>
+                                <p className="text-xs text-blue-600 mb-3">Quantas linhas de atividade cada pavimento ocupa no gráfico (1 a 5)</p>
+                                <div className="flex gap-2">
+                                  {[1, 2, 3, 4, 5].map((n) => (
+                                    <button
+                                      key={n}
+                                      type="button"
+                                      onClick={() => updateBloco(bloco.id, 'linhas', n)}
+                                      className={`w-10 h-10 rounded-lg font-bold text-sm transition-colors ${
+                                        bloco.linhas === n
+                                          ? 'bg-blue-600 text-white shadow'
+                                          : 'bg-white text-blue-700 border border-blue-300 hover:bg-blue-100'
+                                      }`}
+                                    >
+                                      {n}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
 
                               {/* Pavimentos Especiais */}
                               <div>

@@ -64,6 +64,10 @@ export default function EditarBloco() {
   const [formEdicao, setFormEdicao] = useState({ nome: '', numero: '', observacao: '' });
   const [salvandoPavimento, setSalvandoPavimento] = useState(false);
 
+  // Exclusão de pavimento
+  const [pavimentoParaExcluir, setPavimentoParaExcluir] = useState<Pavimento | null>(null);
+  const [excluindo, setExcluindo] = useState(false);
+
   const supabase = useMemo(() => {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -217,6 +221,40 @@ export default function EditarBloco() {
   };
 
   // ─── Editar pavimento ───
+  // ─── Excluir pavimento ───
+  const handleExcluirPavimento = async () => {
+    if (!pavimentoParaExcluir) return;
+    setExcluindo(true);
+    try {
+      const { error } = await supabase
+        .from('pavimentos')
+        .delete()
+        .eq('id', pavimentoParaExcluir.id);
+
+      if (error) {
+        setMensagem({ tipo: 'error', texto: '❌ Erro ao excluir: ' + error.message });
+      } else {
+        setPavimentoParaExcluir(null);
+        await new Promise(r => setTimeout(r, 400));
+
+        const { data: pavData } = await supabase
+          .from('pavimentos').select('*').eq('obra_id', obraId).order('numero', { ascending: false });
+
+        if (pavData) {
+          setPavimentos(pavData.filter(p =>
+            p.nome === nomeBlocoAtual || p.nome.startsWith(`${nomeBlocoAtual} - `)
+          ));
+        }
+
+        setMensagem({ tipo: 'success', texto: '✅ Pavimento excluído!' });
+        setTimeout(() => setMensagem(null), 3000);
+      }
+    } finally {
+      setExcluindo(false);
+      setPavimentoParaExcluir(null);
+    }
+  };
+
   const abrirEdicaoPavimento = (pav: Pavimento) => {
     const sufixo = pav.nome.includes(' - ')
       ? pav.nome.split(' - ').slice(1).join(' - ')
@@ -373,10 +411,16 @@ export default function EditarBloco() {
                           {pav.numero !== null && <p className="text-xs text-slate-500">Nº {pav.numero}</p>}
                           {meta.observacao && <p className="text-xs text-slate-500 italic mt-1">💬 {meta.observacao}</p>}
                         </div>
-                        <button onClick={() => abrirEdicaoPavimento(pav)}
-                          className="px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs font-medium hover:bg-blue-200 opacity-0 group-hover:opacity-100 transition-all">
-                          ✏️ Editar
-                        </button>
+                        <div className="flex flex-col gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                          <button onClick={() => abrirEdicaoPavimento(pav)}
+                            className="px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs font-medium hover:bg-blue-200">
+                            ✏️ Editar
+                          </button>
+                          <button onClick={() => setPavimentoParaExcluir(pav)}
+                            className="px-2 py-1 bg-red-100 text-red-700 rounded text-xs font-medium hover:bg-red-200">
+                            🗑️ Excluir
+                          </button>
+                        </div>
                       </div>
                     </div>
                   );
@@ -417,6 +461,41 @@ export default function EditarBloco() {
               <button onClick={handleSalvarPavimento} disabled={salvandoPavimento}
                 className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white rounded-lg font-semibold">
                 {salvandoPavimento ? '⏳ Salvando...' : '💾 Salvar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Confirmar Exclusão de Pavimento */}
+      {pavimentoParaExcluir && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-2xl p-6 max-w-sm mx-4">
+            <div className="flex items-center gap-3 mb-4">
+              <span className="text-3xl">⚠️</span>
+              <h3 className="text-lg font-bold text-slate-900">Confirmar Exclusão</h3>
+            </div>
+            <p className="text-slate-600 mb-2">Deseja excluir o pavimento?</p>
+            <p className="text-slate-900 font-semibold p-3 bg-slate-100 rounded-lg mb-4">
+              {pavimentoParaExcluir.nome.includes(' - ')
+                ? pavimentoParaExcluir.nome.split(' - ').slice(1).join(' - ')
+                : pavimentoParaExcluir.nome}
+            </p>
+            <p className="text-xs text-red-600 mb-6">⚠️ Esta ação é irreversível.</p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setPavimentoParaExcluir(null)}
+                disabled={excluindo}
+                className="flex-1 px-4 py-2 border border-slate-300 text-slate-700 rounded-lg font-semibold hover:bg-slate-50"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleExcluirPavimento}
+                disabled={excluindo}
+                className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-slate-300 text-white rounded-lg font-semibold"
+              >
+                {excluindo ? '⏳ Excluindo...' : '🗑️ Excluir'}
               </button>
             </div>
           </div>
