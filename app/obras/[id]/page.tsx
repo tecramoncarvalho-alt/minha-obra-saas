@@ -12,7 +12,16 @@ interface Obra {
   data_inicio: string | null;
   data_fim: string | null;
   foto_url: string | null;
+  sabado_util: boolean;
+  domingo_util: boolean;
   created_at: string;
+}
+
+interface Feriado {
+  id: number;
+  obra_id: number;
+  data: string;
+  nome: string;
 }
 
 interface Pavimento {
@@ -171,7 +180,13 @@ export default function ObraDetalhes() {
 
   // Edição da obra
   const [modalEditarObra, setModalEditarObra] = useState(false);
-  const [formObra, setFormObra] = useState({ nome: '', descricao: '', data_inicio: '', data_fim: '' });
+  const [formObra, setFormObra] = useState({
+    nome: '', descricao: '', data_inicio: '', data_fim: '',
+    sabado_util: false, domingo_util: false,
+  });
+  const [feriados, setFeriados] = useState<Feriado[]>([]);
+  const [formFeriado, setFormFeriado] = useState({ data: '', nome: '' });
+  const [salvandoFeriado, setSalvandoFeriado] = useState(false);
   const [salvandoObra, setSalvandoObra] = useState(false);
   const [excluindoObra, setExcluindoObra] = useState(false);
   const [uploadandoFoto, setUploadandoFoto] = useState(false);
@@ -217,6 +232,10 @@ export default function ObraDetalhes() {
       const { data: pavData } = await supabase
         .from('pavimentos').select('*').eq('obra_id', obraId).order('numero', { ascending: false });
       setPavimentos(pavData || []);
+
+      const { data: ferData } = await supabase
+        .from('feriados').select('*').eq('obra_id', obraId).order('data');
+      setFeriados(ferData || []);
     } finally {
       setLoading(false);
     }
@@ -230,6 +249,8 @@ export default function ObraDetalhes() {
       descricao: obra.descricao || '',
       data_inicio: obra.data_inicio || '',
       data_fim: obra.data_fim || '',
+      sabado_util: obra.sabado_util || false,
+      domingo_util: obra.domingo_util || false,
     });
     setModalEditarObra(true);
   };
@@ -242,6 +263,8 @@ export default function ObraDetalhes() {
       descricao: formObra.descricao.trim() || null,
       data_inicio: formObra.data_inicio || null,
       data_fim: formObra.data_fim || null,
+      sabado_util: formObra.sabado_util,
+      domingo_util: formObra.domingo_util,
     }).eq('id', obraId);
     if (!error) {
       setModalEditarObra(false);
@@ -252,36 +275,75 @@ export default function ObraDetalhes() {
     setSalvandoObra(false);
   };
 
+  const handleAdicionarFeriado = async () => {
+    if (!formFeriado.data || !formFeriado.nome.trim()) return;
+    setSalvandoFeriado(true);
+    const { error } = await supabase.from('feriados').insert({
+      obra_id: obraId, data: formFeriado.data, nome: formFeriado.nome.trim(),
+    });
+    if (!error) {
+      setFormFeriado({ data: '', nome: '' });
+      const { data } = await supabase.from('feriados').select('*').eq('obra_id', obraId).order('data');
+      setFeriados(data || []);
+    }
+    setSalvandoFeriado(false);
+  };
+
+  const handleExcluirFeriado = async (id: number) => {
+    await supabase.from('feriados').delete().eq('id', id);
+    setFeriados(prev => prev.filter(f => f.id !== id));
+  };
+
   const handleExcluirObra = async () => {
     if (!confirm(`Excluir a obra "${obra?.nome}"?\nEsta ação é irreversível e apagará todos os dados.`)) return;
     setExcluindoObra(true);
     try {
-      // Deletar manualmente em cascata
-      // 1. Subatividades
-      const { data: pavs } = await supabase.from('pavimentos').select('id').eq('obra_id', obraId);
+      // 1. Buscar pavimentos
+      const { data: pavs, error: e1 } = await supabase.from('pavimentos').select('id').eq('obra_id', obraId);
+      if (e1) { alert('❌ Erro ao buscar pavimentos: ' + e1.message); setExcluindoObra(false); return; }
+
       const pavIds = (pavs || []).map(p => p.id);
+      console.log('Pavimentos:', pavIds);
+
       if (pavIds.length > 0) {
-        const { data: ativs } = await supabase.from('atividades').select('id').in('pavimento_id', pavIds);
+        // 2. Buscar atividades
+        const { data: ativs, error: e2 } = await supabase.from('atividades').select('id').in('pavimento_id', pavIds);
+        if (e2) { alert('❌ Erro ao buscar atividades: ' + e2.message); setExcluindoObra(false); return; }
+
         const ativIds = (ativs || []).map(a => a.id);
+        console.log('Atividades:', ativIds);
+
         if (ativIds.length > 0) {
-          await supabase.from('subatividades').delete().in('atividade_id', ativIds);
-          await supabase.from('atividades').delete().in('pavimento_id', pavIds);
+          // 3. Deletar subatividades
+          const { error: e3 } = await supabase.from('subatividades').delete().in('atividade_id', ativIds);
+          if (e3) { alert('❌ Erro ao deletar subatividades: ' + e3.message); setExcluindoObra(false); return; }
+          console.log('Subatividades deletadas ✅');
+
+          // 4. Deletar atividades
+          const { error: e4 } = await supabase.from('atividades').delete().in('pavimento_id', pavIds);
+          if (e4) { alert('❌ Erro ao deletar atividades: ' + e4.message); setExcluindoObra(false); return; }
+          console.log('Atividades deletadas ✅');
         }
+
+        // 5. Deletar pavimentos
+        const { error: e5 } = await supabase.from('pavimentos').delete().eq('obra_id', obraId);
+        if (e5) { alert('❌ Erro ao deletar pavimentos: ' + e5.message); setExcluindoObra(false); return; }
+        console.log('Pavimentos deletados ✅');
       }
-      // 2. Versões
-      await supabase.from('versoes').delete().eq('obra_id', obraId);
-      // 3. Pavimentos
-      await supabase.from('pavimentos').delete().eq('obra_id', obraId);
-      // 4. Obra
-      const { error } = await supabase.from('obras').delete().eq('id', obraId);
-      if (!error) {
-        router.push('/');
-      } else {
-        alert('❌ Erro ao excluir obra: ' + error.message);
-        setExcluindoObra(false);
-      }
+
+      // 6. Deletar versões
+      const { error: e6 } = await supabase.from('versoes').delete().eq('obra_id', obraId);
+      if (e6) { alert('❌ Erro ao deletar versões: ' + e6.message); setExcluindoObra(false); return; }
+      console.log('Versões deletadas ✅');
+
+      // 7. Deletar obra
+      const { error: e7 } = await supabase.from('obras').delete().eq('id', obraId);
+      if (e7) { alert('❌ Erro ao deletar obra: ' + e7.message); setExcluindoObra(false); return; }
+
+      console.log('Obra deletada ✅');
+      router.push('/');
     } catch (err) {
-      alert('❌ Erro: ' + String(err));
+      alert('❌ Erro inesperado: ' + String(err));
       setExcluindoObra(false);
     }
   };
@@ -1129,23 +1191,28 @@ export default function ObraDetalhes() {
       {/* Modal Editar Obra */}
       {modalEditarObra && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl shadow-2xl p-6 max-w-md w-full mx-4">
+          <div className="bg-white rounded-xl shadow-2xl p-6 max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto">
             <h3 className="text-lg font-bold text-slate-900 mb-5">✏️ Editar Obra</h3>
 
             <div className="space-y-4">
+              {/* Nome */}
               <div>
                 <label className="block text-sm font-semibold text-slate-700 mb-1">Nome *</label>
                 <input type="text" value={formObra.nome}
                   onChange={e => setFormObra(p => ({ ...p, nome: e.target.value }))}
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-slate-900" />
               </div>
+
+              {/* Descrição */}
               <div>
                 <label className="block text-sm font-semibold text-slate-700 mb-1">Descrição</label>
                 <textarea value={formObra.descricao}
                   onChange={e => setFormObra(p => ({ ...p, descricao: e.target.value }))}
-                  rows={3}
+                  rows={2}
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-slate-900" />
               </div>
+
+              {/* Datas */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-sm font-semibold text-slate-700 mb-1">Data Início</label>
@@ -1161,20 +1228,70 @@ export default function ObraDetalhes() {
                 </div>
               </div>
 
+              {/* Calendário */}
+              <div className="border border-slate-200 rounded-lg p-4 space-y-3">
+                <p className="text-sm font-semibold text-slate-700">📅 Dias Úteis</p>
+                <label className="flex items-center gap-3 cursor-pointer">
+                  <input type="checkbox" checked={formObra.sabado_util}
+                    onChange={e => setFormObra(p => ({ ...p, sabado_util: e.target.checked }))}
+                    className="w-4 h-4 rounded accent-blue-600" />
+                  <span className="text-sm text-slate-700">Sábado é dia útil</span>
+                </label>
+                <label className="flex items-center gap-3 cursor-pointer">
+                  <input type="checkbox" checked={formObra.domingo_util}
+                    onChange={e => setFormObra(p => ({ ...p, domingo_util: e.target.checked }))}
+                    className="w-4 h-4 rounded accent-blue-600" />
+                  <span className="text-sm text-slate-700">Domingo é dia útil</span>
+                </label>
+              </div>
+
+              {/* Feriados */}
+              <div className="border border-slate-200 rounded-lg p-4 space-y-3">
+                <p className="text-sm font-semibold text-slate-700">🏖️ Feriados / Recessos</p>
+
+                {/* Lista de feriados */}
+                {feriados.length > 0 && (
+                  <div className="space-y-1 max-h-36 overflow-y-auto">
+                    {feriados.map(f => (
+                      <div key={f.id} className="flex items-center justify-between bg-slate-50 rounded px-3 py-1.5 text-sm">
+                        <span className="text-slate-700">
+                          <span className="font-medium">{new Date(f.data + 'T00:00:00').toLocaleDateString('pt-BR')}</span>
+                          <span className="text-slate-500 ml-2">— {f.nome}</span>
+                        </span>
+                        <button onClick={() => handleExcluirFeriado(f.id)}
+                          className="text-red-400 hover:text-red-600 text-xs ml-2">✕</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Adicionar feriado */}
+                <div className="flex gap-2">
+                  <input type="date" value={formFeriado.data}
+                    onChange={e => setFormFeriado(p => ({ ...p, data: e.target.value }))}
+                    className="px-2 py-1.5 border border-slate-300 rounded-lg outline-none focus:ring-1 focus:ring-blue-500 text-slate-900 text-sm" />
+                  <input type="text" value={formFeriado.nome}
+                    onChange={e => setFormFeriado(p => ({ ...p, nome: e.target.value }))}
+                    placeholder="Ex: Natal, Carnaval"
+                    className="flex-1 px-2 py-1.5 border border-slate-300 rounded-lg outline-none focus:ring-1 focus:ring-blue-500 text-slate-900 text-sm" />
+                  <button onClick={handleAdicionarFeriado}
+                    disabled={salvandoFeriado || !formFeriado.data || !formFeriado.nome.trim()}
+                    className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white rounded-lg text-sm font-semibold">
+                    +
+                  </button>
+                </div>
+              </div>
+
               {/* Foto */}
               <div>
                 <label className="block text-sm font-semibold text-slate-700 mb-2">Foto da Obra</label>
                 <div className="flex items-center gap-3">
                   <div className="w-16 h-16 rounded-lg overflow-hidden bg-slate-100 border border-slate-200 flex items-center justify-center flex-shrink-0">
-                    {obra?.foto_url
-                      ? <img src={obra.foto_url} alt="" className="w-full h-full object-cover" />
-                      : <span className="text-2xl">🏗️</span>
-                    }
+                    {obra?.foto_url ? <img src={obra.foto_url} alt="" className="w-full h-full object-cover" /> : <span className="text-2xl">🏗️</span>}
                   </div>
                   <button type="button"
                     onClick={() => { setModalEditarObra(false); setTimeout(() => fotoInputRef.current?.click(), 100); }}
-                    className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-sm font-semibold transition-colors"
-                  >
+                    className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-sm font-semibold">
                     {uploadandoFoto ? '⏳ Enviando...' : '📷 Alterar foto'}
                   </button>
                 </div>
@@ -1182,12 +1299,9 @@ export default function ObraDetalhes() {
             </div>
 
             <div className="flex gap-3 mt-6">
-              {/* Excluir obra */}
-              <button
-                onClick={() => { setModalEditarObra(false); handleExcluirObra(); }}
+              <button onClick={() => { setModalEditarObra(false); handleExcluirObra(); }}
                 disabled={excluindoObra || salvandoObra}
-                className="px-3 py-2 bg-red-100 hover:bg-red-200 text-red-700 rounded-lg font-semibold text-sm transition-colors"
-              >
+                className="px-3 py-2 bg-red-100 hover:bg-red-200 text-red-700 rounded-lg font-semibold text-sm">
                 {excluindoObra ? '⏳' : '🗑️ Excluir'}
               </button>
               <button onClick={() => setModalEditarObra(false)} disabled={salvandoObra}

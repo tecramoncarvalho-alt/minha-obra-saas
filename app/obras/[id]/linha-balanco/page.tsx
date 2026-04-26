@@ -5,7 +5,12 @@ import { useParams, useRouter } from 'next/navigation';
 import { createClient } from '@supabase/supabase-js';
 
 // ─── Interfaces ───
-interface Obra { id: number; nome: string; }
+interface Obra {
+  id: number; nome: string;
+  sabado_util: boolean; domingo_util: boolean;
+  data_inicio: string | null; data_fim: string | null;
+}
+interface Feriado { id: number; obra_id: number; data: string; nome: string; }
 interface Pavimento {
   id: number; obra_id: number; nome: string;
   numero: number | null; observacao: string | null;
@@ -84,12 +89,50 @@ const getCorSub = (atividadeNome: string, subIndex: number): string => {
 // Calcular duração total das subatividades
 const calcDuracaoTotal = (subs: {duracao: number}[]) => subs.reduce((acc, s) => acc + (s.duracao || 0), 0);
 
-// ─── Datas ───
+// ─── Datas base ───
 const parseDate = (s: string) => { const [y,m,d] = s.split('-').map(Number); return new Date(y,m-1,d); };
 const diffDias = (a: Date, b: Date) => Math.round((b.getTime()-a.getTime())/86400000);
 const addDias = (d: Date, n: number) => { const r = new Date(d); r.setDate(r.getDate()+n); return r; };
-const toStr = (d: Date) => d.toISOString().split('T')[0];
+const toStr = (d: Date) => { const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,'0'),dd=String(d.getDate()).padStart(2,'0'); return `${y}-${m}-${dd}`; };
 const fmtDate = (s: string) => parseDate(s).toLocaleDateString('pt-BR');
+
+// Labels e cores do calendário
+const LABEL_DIA = ['D','S','T','Q','Q','S','S'];
+
+const corColunaDia = (data: Date, feriadosSet: Set<string>, sabUtil: boolean, domUtil: boolean): string | undefined => {
+  const dia = data.getDay();
+  const s = toStr(data);
+  if (feriadosSet.has(s)) return 'rgba(239,68,68,0.12)';
+  if (dia === 0) return domUtil ? undefined : 'rgba(99,102,241,0.12)';
+  if (dia === 6) return sabUtil ? undefined : 'rgba(99,102,241,0.06)';
+  return undefined;
+};
+
+// Adicionar N dias úteis
+// Avançar até o próximo dia útil (inclusive o próprio dia)
+const proximoDiaUtil = (data: Date, feriadosSet: Set<string>, sabUtil: boolean, domUtil: boolean): Date => {
+  const r = new Date(data);
+  while (true) {
+    const dia = r.getDay();
+    const s = toStr(r);
+    if (!feriadosSet.has(s) && !(dia === 6 && !sabUtil) && !(dia === 0 && !domUtil)) return r;
+    r.setDate(r.getDate() + 1);
+  }
+};
+
+const addDiasUteis = (data: Date, dias: number, feriadosSet: Set<string>, sabUtil: boolean, domUtil: boolean): Date => {
+  const r = new Date(data);
+  let restante = Math.abs(dias);
+  const dir = dias >= 0 ? 1 : -1;
+  while (restante > 0) {
+    r.setDate(r.getDate() + dir);
+    const dia = r.getDay();
+    const s = toStr(r);
+    if (!feriadosSet.has(s) && !(dia === 6 && !sabUtil) && !(dia === 0 && !domUtil)) restante--;
+  }
+  return r;
+};
+
 const gerarUUID = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
 // ─── Layout ───
@@ -103,9 +146,31 @@ export default function LinhaDeBalanco() {
 
   const [obra, setObra] = useState<Obra | null>(null);
   const [pavimentos, setPavimentos] = useState<PavComAtiv[]>([]);
+  const [feriados, setFeriados] = useState<Feriado[]>([]);
   const [loading, setLoading] = useState(true);
   const [atualizando, setAtualizando] = useState(false);
   const [mensagem, setMensagem] = useState<{tipo:'success'|'error';texto:string}|null>(null);
+
+  // Calendário
+  const feriadosSet = useMemo(() => new Set(feriados.map(f => f.data)), [feriados]);
+  const sabadoUtil = obra?.sabado_util ?? false;
+  const domingoUtil = obra?.domingo_util ?? false;
+
+  // Refs para valores sempre atuais dentro de callbacks e effects
+  const calendarioRef = useRef({ feriadosSet, sabadoUtil, domingoUtil });
+  useEffect(() => {
+    calendarioRef.current = { feriadosSet, sabadoUtil, domingoUtil };
+  }, [feriadosSet, sabadoUtil, domingoUtil]);
+
+  // Zoom / Filtro de datas
+  const [zoomInicio, setZoomInicio] = useState('');
+  const [zoomFim, setZoomFim] = useState('');
+
+  // Tela cheia e filtros avançados
+  const [telaCheia, setTelaCheia] = useState(false);
+  const [pavimentosFiltro, setPavimentosFiltro] = useState<Set<number>>(new Set()); // vazio = todos
+  const [modalFiltros, setModalFiltros] = useState(false);
+  const telaCheiaPrintRef = useRef<HTMLDivElement>(null);
 
   // ─── Versões ───
   interface Versao {
@@ -143,15 +208,13 @@ export default function LinhaDeBalanco() {
 
   // ─── Pavimentos a exibir ───
   // Prioridade:
-  // 1. modoRascunho → snapshotBase (edição temporária sobre Definitiva)
-  // 2. versão Definitiva selecionada → snapshot arquivado (somente leitura)
-  // 3. versão Em Atualização ou sem versão → pavimentos ao vivo (estado reativo)
+  // Regra simples:
+  // - Versão Definitiva (sem rascunho) → snapshot somente leitura
+  // - Qualquer outro caso (ao vivo, Em Atualização, rascunho) → pavimentos (estado reativo)
   const pavimentosExibidos: PavComAtiv[] =
-    modoRascunho && snapshotBase?.pavimentos
-      ? snapshotParaPavimentos(snapshotBase)
-      : (versaoAtual?.status === 'Definitiva' && versaoAtual?.snapshot?.pavimentos)
-        ? snapshotParaPavimentos(versaoAtual.snapshot)
-        : pavimentos;
+    (versaoAtual?.status === 'Definitiva' && !modoRascunho && versaoAtual?.snapshot?.pavimentos)
+      ? snapshotParaPavimentos(versaoAtual.snapshot)
+      : pavimentos;
 
   const [modalVersao, setModalVersao] = useState(false);
   const [modalHistorico, setModalHistorico] = useState(false);
@@ -200,26 +263,11 @@ export default function LinhaDeBalanco() {
 
   // Atualiza campos de uma atividade em qualquer pavimento
   const atualizarAtividadeLocal = (atId: number, campos: Partial<Atividade>) => {
-    const aplicar = (pavs: PavComAtiv[]) => pavs.map(pav => ({
+    // Sempre atualizar o estado reativo de pavimentos — é a fonte de verdade para renderização
+    setPavimentos(prev => prev.map(pav => ({
       ...pav,
       atividades: pav.atividades.map(at => at.id === atId ? { ...at, ...campos } : at),
-    }));
-    if (modoRascunho && snapshotBase) {
-      setSnapshotBase((prev: any) => ({
-        ...prev,
-        pavimentos: aplicar(snapshotParaPavimentos(prev)).map(p => ({
-          ...p,
-          atividades: p.atividades.map(at => ({
-            id: at.id, nome: at.nome, data_inicio: at.data_inicio, data_fim: at.data_fim,
-            duracao_dias: at.duracao_dias, equipe: at.equipe, efetivo: at.efetivo ?? null,
-            linha_index: at.linha_index, vinculo_id: at.vinculo_id, vinculo_ordem: at.vinculo_ordem,
-            subatividades: at.subatividades,
-          })),
-        })),
-      }));
-    } else {
-      setPavimentos(prev => aplicar(prev));
-    }
+    })));
     marcarDirty();
   };
 
@@ -275,18 +323,18 @@ export default function LinhaDeBalanco() {
       const idxOrigem = cadeia.findIndex(a => a.id === atOrigemId);
       if (idxOrigem < 0) return prev;
 
-      // Recalcular datas dos sucessores
+      // Recalcular datas dos sucessores em dias úteis
       const novasDatas: Record<number, { inicio: string; fim: string }> = {};
       for (let i = idxOrigem; i < cadeia.length; i++) {
         const at = cadeia[i];
-        const dur = diffDias(parseDate(at.data_inicio), parseDate(at.data_fim));
+        const durUtil = at.duracao_dias ?? diffDias(parseDate(at.data_inicio), parseDate(at.data_fim)) + 1;
         if (i === idxOrigem) {
-          const ni = addDias(parseDate(at.data_inicio), deltaDias);
-          novasDatas[at.id] = { inicio: toStr(ni), fim: toStr(addDias(ni, dur)) };
+          const ni = addDiasUteis(parseDate(at.data_inicio), deltaDias, feriadosSet, sabadoUtil, domingoUtil);
+          novasDatas[at.id] = { inicio: toStr(ni), fim: toStr(calcDataFimUtil(ni, durUtil)) };
         } else {
           const antFim = parseDate(novasDatas[cadeia[i-1].id].fim);
-          const ni = addDias(antFim, 1);
-          novasDatas[at.id] = { inicio: toStr(ni), fim: toStr(addDias(ni, dur)) };
+          const ni = addDiasUteis(antFim, 1, feriadosSet, sabadoUtil, domingoUtil);
+          novasDatas[at.id] = { inicio: toStr(ni), fim: toStr(calcDataFimUtil(ni, durUtil)) };
         }
       }
 
@@ -396,6 +444,10 @@ export default function LinhaDeBalanco() {
       const { data: obraData } = await supabase.from('obras').select('*').eq('id', obraId).single();
       if (obraData) setObra(obraData);
 
+      // Feriados
+      const { data: ferData } = await supabase.from('feriados').select('*').eq('obra_id', obraId);
+      setFeriados(ferData || []);
+
       const { data: pavData } = await supabase
         .from('pavimentos').select('*').eq('obra_id', obraId).order('numero', { ascending: false });
       if (!pavData) return;
@@ -454,7 +506,54 @@ export default function LinhaDeBalanco() {
     setTimeout(() => setMensagem(null), 5000);
   };
 
-  // ─── Atualizar snapshotBase quando atividade é movida (em modo rascunho) ───
+  // ─── Helper: calcular data fim em dias úteis usando config da obra ───
+  // ─── Helpers de dias úteis (usam ref — sempre valores atuais) ───
+  const isDiaUtil = useCallback((data: Date): boolean => {
+    const { feriadosSet: fs, sabadoUtil: su, domingoUtil: du } = calendarioRef.current;
+    const dia = data.getDay();
+    const s = toStr(data);
+    return !fs.has(s) && !(dia === 6 && !su) && !(dia === 0 && !du);
+  }, []);
+
+  const calcInicioUtil = useCallback((data: Date): Date => {
+    const r = new Date(data);
+    while (!(() => {
+      const { feriadosSet: fs, sabadoUtil: su, domingoUtil: du } = calendarioRef.current;
+      const dia = r.getDay(); const s = toStr(r);
+      return !fs.has(s) && !(dia === 6 && !su) && !(dia === 0 && !du);
+    })()) r.setDate(r.getDate() + 1);
+    return r;
+  }, []);
+
+  const calcDataFimUtil = useCallback((inicio: Date, duracaoDias: number): Date => {
+    const { feriadosSet: fs, sabadoUtil: su, domingoUtil: du } = calendarioRef.current;
+    // Avançar início para o primeiro dia útil (inclusive)
+    const r = new Date(inicio);
+    while (true) {
+      const dia = r.getDay(); const s = toStr(r);
+      if (!fs.has(s) && !(dia === 6 && !su) && !(dia === 0 && !du)) break;
+      r.setDate(r.getDate() + 1);
+    }
+    // Contar (duracaoDias - 1) dias úteis adicionais
+    let restante = duracaoDias - 1;
+    while (restante > 0) {
+      r.setDate(r.getDate() + 1);
+      const dia = r.getDay(); const s = toStr(r);
+      if (!fs.has(s) && !(dia === 6 && !su) && !(dia === 0 && !du)) restante--;
+    }
+    return r;
+  }, []);
+
+  const calcProximoInicioUtil = useCallback((fimAnterior: Date): Date => {
+    const { feriadosSet: fs, sabadoUtil: su, domingoUtil: du } = calendarioRef.current;
+    const r = new Date(fimAnterior);
+    r.setDate(r.getDate() + 1);
+    while (true) {
+      const dia = r.getDay(); const s = toStr(r);
+      if (!fs.has(s) && !(dia === 6 && !su) && !(dia === 0 && !du)) return r;
+      r.setDate(r.getDate() + 1);
+    }
+  }, []);
   const atualizarSnapshotBaseLocal = (atId: number, campos: Partial<Atividade>) => {
     if (!modoRascunho || !snapshotBase) return;
     const novoSnapshot = JSON.parse(JSON.stringify(snapshotBase));
@@ -594,22 +693,49 @@ export default function LinhaDeBalanco() {
     setTimeout(() => setMensagem(null), 3000);
   };
 
-  // ─── Datas mín/máx ───
-  const { dataMin, totalDias } = useMemo(() => {
+  // ─── Datas mín/máx com zoom ───
+  const { dataMin, dataMax, totalDias } = useMemo(() => {
     const todas = pavimentosExibidos.flatMap(p => p.atividades);
-    if (todas.length === 0) { const h = new Date(); return { dataMin: addDias(h, -5), totalDias: 60 }; }
-    const datas = todas.flatMap(a => [parseDate(a.data_inicio), parseDate(a.data_fim)]);
-    const min = addDias(new Date(Math.min(...datas.map(d => d.getTime()))), -5);
-    const max = addDias(new Date(Math.max(...datas.map(d => d.getTime()))), 10);
-    return { dataMin: min, totalDias: Math.max(30, diffDias(min, max)) };
-  }, [pavimentos]);
 
+    let min: Date, max: Date;
+    if (todas.length > 0) {
+      const datas = todas.flatMap(a => [parseDate(a.data_inicio), parseDate(a.data_fim)]);
+      min = addDias(new Date(Math.min(...datas.map(d => d.getTime()))), -3);
+      max = addDias(new Date(Math.max(...datas.map(d => d.getTime()))), 5);
+    } else {
+      min = obra?.data_inicio ? parseDate(obra.data_inicio) : new Date();
+      max = obra?.data_fim ? parseDate(obra.data_fim) : addDias(new Date(), 60);
+    }
+
+    // Aplicar zoom
+    const zMin = zoomInicio ? parseDate(zoomInicio) : min;
+    const zMax = zoomFim ? parseDate(zoomFim) : max;
+    return { dataMin: zMin, dataMax: zMax, totalDias: Math.max(7, diffDias(zMin, zMax)) };
+  }, [pavimentosExibidos, obra, zoomInicio, zoomFim]);
+
+  // ─── Dias do calendário (um por coluna) ───
+  const diasCalendario = useMemo(() => {
+    const dias: Date[] = [];
+    const atual = new Date(dataMin);
+    for (let i = 0; i <= totalDias; i++) {
+      dias.push(new Date(atual));
+      atual.setDate(atual.getDate() + 1);
+    }
+    return dias;
+  }, [dataMin, totalDias]);
+
+  // Marcadores de semana para linha de tempo
   const marcadores = useMemo(() => {
-    const step = totalDias <= 60 ? 7 : totalDias <= 180 ? 14 : 30;
-    return Array.from({ length: Math.floor(totalDias / step) + 1 }, (_, i) => ({
-      dia: i * step,
-      label: addDias(dataMin, i * step).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }),
-    }));
+    const step = totalDias <= 30 ? 1 : totalDias <= 90 ? 7 : totalDias <= 180 ? 14 : 30;
+    const result = [];
+    for (let i = 0; i <= totalDias; i += step) {
+      result.push({
+        dia: i,
+        label: addDias(dataMin, i).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }),
+        data: addDias(dataMin, i),
+      });
+    }
+    return result;
   }, [dataMin, totalDias]);
 
   const ppd = useCallback(() => {
@@ -619,6 +745,131 @@ export default function LinhaDeBalanco() {
 
   // ─── Calcular posições das atividades vinculadas para o SVG ───
   // ─── Conflitos ───
+  // ─── Pavimentos filtrados para exibição ───
+  const pavimentosFiltrados = useMemo(() => {
+    if (pavimentosFiltro.size === 0) return pavimentosExibidos;
+    return pavimentosExibidos.filter(p => pavimentosFiltro.has(p.id));
+  }, [pavimentosExibidos, pavimentosFiltro]);
+
+  // ─── Imprimir / Exportar PDF ───
+  const handleImprimir = () => {
+    const win = window.open('', '_blank', 'width=1400,height=900');
+    if (!win) { alert('Permita popups para imprimir'); return; }
+
+    const pxPorDia = totalDias <= 30 ? 44 : totalDias <= 60 ? 30 : totalDias <= 120 ? 20 : 12;
+    const larguraGrafico = Math.max(LARGURA_NOME + totalDias * pxPorDia, 1000);
+    const ALTURA = ALTURA_LINHA;
+
+    // Gerar linhas do eixo X
+    const eixoX = diasCalendario.map((dia, i) => {
+      const pct = (i / totalDias) * 100;
+      const larg = (1 / totalDias) * 100;
+      const bgCor = corColunaDia(dia, feriadosSet, sabadoUtil, domingoUtil) || 'transparent';
+      const isDom = dia.getDay() === 0;
+      const isSab = dia.getDay() === 6;
+      const isFer = feriadosSet.has(toStr(dia));
+      const cor = isFer ? '#ef4444' : isDom ? '#6366f1' : isSab ? '#a5b4fc' : '#94a3b8';
+      return `<div style="position:absolute;left:${pct}%;width:${larg}%;top:0;bottom:0;background:${bgCor};border-left:1px solid rgba(0,0,0,0.04);display:flex;flex-direction:column;align-items:center;justify-content:center;">
+        <span style="font-size:9px;font-weight:700;color:${cor};line-height:1">${LABEL_DIA[dia.getDay()]}</span>
+        <span style="font-size:9px;color:#94a3b8;line-height:1;margin-top:1px">${dia.getDate()}</span>
+      </div>`;
+    }).join('');
+
+    // Gerar linhas dos pavimentos
+    const linhasPav = pavimentosFiltrados.map((pav, pavIdx) => {
+      const altTotal = pav.numLinhas * ALTURA;
+      const bg = pavIdx % 2 === 0 ? '#ffffff' : '#f8fafc';
+
+      // Grade de fundo
+      const grade = diasCalendario.map((dia, i) => {
+        const bgCor = corColunaDia(dia, feriadosSet, sabadoUtil, domingoUtil);
+        return bgCor ? `<div style="position:absolute;left:${(i/totalDias)*100}%;width:${(1/totalDias)*100}%;top:0;bottom:0;background:${bgCor}"></div>` : '';
+      }).join('');
+
+      // Separadores de linhas
+      const seps = Array.from({ length: pav.numLinhas - 1 }, (_, i) =>
+        `<div style="position:absolute;left:0;right:0;top:${(i+1)*ALTURA}px;border-top:1px dashed #e2e8f0"></div>`
+      ).join('');
+
+      // Barras de atividades
+      const barras = pav.atividades.map(at => {
+        const dispDia = diffDias(dataMin, parseDate(at.data_inicio));
+        const dur = diffDias(parseDate(at.data_inicio), parseDate(at.data_fim)) + 1;
+        const leftPct = Math.max(0, (dispDia / totalDias) * 100);
+        const rightPct = Math.min(100, ((dispDia + dur) / totalDias) * 100);
+        const widthPct = rightPct - leftPct;
+        if (widthPct <= 0) return '';
+        const cor = getCor(at.nome);
+        const linhaAt = at.linha_index ?? 0;
+        const top = linhaAt * ALTURA + 4;
+        const height = ALTURA - 8;
+
+        // Subatividades
+        const subHtml = (at.subatividades?.length ?? 0) > 0 ? (() => {
+          const durT = at.subatividades!.reduce((a, b) => a + (b.duracao || 0), 0);
+          const segs = at.subatividades!.map((s, i) =>
+            `<div style="height:100%;width:${(s.duracao/durT)*100}%;background:${s.cor||getCorSub(at.nome,i)};${i>0?'border-left:1px solid rgba(255,255,255,0.4)':''}"></div>`
+          ).join('');
+          return `<div style="position:absolute;bottom:0;left:0;right:0;height:40%;display:flex">${segs}</div>`;
+        })() : '';
+
+        return `<div style="position:absolute;left:${leftPct}%;width:${widthPct}%;top:${top}px;height:${height}px;background:${cor};border-radius:4px;overflow:hidden;min-width:4px;">
+          <div style="position:absolute;top:0;left:0;right:0;bottom:40%;display:flex;align-items:center;padding:0 6px;">
+            <span style="color:white;font-size:10px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-shadow:0 1px 2px rgba(0,0,0,0.3)">${at.nome}</span>
+          </div>
+          ${subHtml}
+        </div>`;
+      }).join('');
+
+      const nomeSufixo = pav.nome.includes(' - ') ? pav.nome.split(' - ').slice(1).join(' - ') : pav.nome;
+
+      return `<div style="display:flex;border-bottom:1px solid #f1f5f9;height:${altTotal}px;background:${bg}">
+        <div style="width:${LARGURA_NOME}px;min-width:${LARGURA_NOME}px;border-right:1px solid #e2e8f0;padding:4px 12px;display:flex;flex-direction:column;justify-content:center;">
+          <div style="font-size:11px;font-weight:600;color:#1e293b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${nomeSufixo}</div>
+          ${pav.numero !== null ? `<div style="font-size:10px;color:#94a3b8">Nº ${pav.numero}</div>` : ''}
+        </div>
+        <div style="flex:1;position:relative;overflow:hidden">
+          ${grade}${seps}${barras}
+        </div>
+      </div>`;
+    }).join('');
+
+    // Legenda de cores
+    const legendaHtml = Object.entries(coresCache).map(([nome, cor]) =>
+      `<div style="display:flex;align-items:center;gap:5px"><div style="width:12px;height:12px;border-radius:3px;background:${cor}"></div><span style="font-size:11px;color:#475569">${nome}</span></div>`
+    ).join('');
+
+    win.document.write(`<!DOCTYPE html><html><head>
+      <title>${obra?.nome} — Linha de Balanço</title>
+      <style>
+        body{margin:0;padding:12px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#fff}
+        h1{font-size:18px;font-weight:700;color:#0f172a;margin:0 0 2px}
+        .info{font-size:11px;color:#64748b;margin:0 0 10px}
+        .legenda{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:10px;padding:8px 12px;background:#f8fafc;border-radius:6px;border:1px solid #e2e8f0}
+        .grafico{border:1px solid #e2e8f0;border-radius:6px;overflow:hidden}
+        .eixoX{display:flex;border-bottom:1px solid #e2e8f0;background:#f8fafc;height:40px}
+        .nomeCol{width:${LARGURA_NOME}px;min-width:${LARGURA_NOME}px;border-right:1px solid #e2e8f0;padding:0 12px;display:flex;align-items:center}
+        .nomeCol span{font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.05em}
+        .diasArea{flex:1;position:relative;overflow:hidden}
+        @media print{body{padding:4px}@page{size:A3 landscape;margin:6mm}}
+      </style>
+    </head><body>
+      <h1>${obra?.nome} — Linha de Balanço</h1>
+      <p class="info">📅 ${dataMin.toLocaleDateString('pt-BR')} → ${addDias(dataMin, totalDias).toLocaleDateString('pt-BR')} &nbsp;|&nbsp; ${totalDias} dias úteis &nbsp;|&nbsp; ${pavimentosFiltrados.length} pavimentos &nbsp;|&nbsp; ${totalAtividades} atividades</p>
+      <div class="legenda">${legendaHtml}</div>
+      <div class="grafico" style="width:${larguraGrafico}px">
+        <div class="eixoX">
+          <div class="nomeCol"><span>Pavimento</span></div>
+          <div class="diasArea" style="height:40px">${eixoX}</div>
+        </div>
+        ${linhasPav}
+      </div>
+    </body></html>`);
+
+    win.document.close();
+    setTimeout(() => { win.focus(); win.print(); }, 600);
+  };
+
   const conflitos = useMemo(() => {
     const set = new Set<number>();
     const motivoConflito: Record<number, string> = {};
@@ -682,9 +933,11 @@ export default function LinhaDeBalanco() {
       const d = Math.round((e.clientX - drag.startX) / ppd());
       const dl = Math.max(0, Math.min(drag.pav.numLinhas - 1, drag.startLinha + Math.round((e.clientY - drag.startY) / ALTURA_LINHA))) - drag.startLinha;
       setDrag(prev => prev ? { ...prev, deltaDias: d, deltaLinha: dl } : null);
+      // Preview: novo início em dias corridos, fim recalculado em dias úteis
       const ni = addDias(parseDate(drag.at.data_inicio), d);
-      const dur = diffDias(parseDate(drag.at.data_inicio), parseDate(drag.at.data_fim));
-      setTooltip({ at: { ...drag.at, data_inicio: toStr(ni), data_fim: toStr(addDias(ni, dur)), linha_index: drag.startLinha + dl }, pav: drag.pav, x: e.clientX, y: e.clientY });
+      const duracaoUtil = drag.at.duracao_dias ?? (diffDias(parseDate(drag.at.data_inicio), parseDate(drag.at.data_fim)) + 1);
+      const nf = calcDataFimUtil(ni, duracaoUtil);
+      setTooltip({ at: { ...drag.at, data_inicio: toStr(ni), data_fim: toStr(nf), linha_index: drag.startLinha + dl }, pav: drag.pav, x: e.clientX, y: e.clientY });
     };
 
     const onUp = async (e: MouseEvent) => {
@@ -701,9 +954,11 @@ export default function LinhaDeBalanco() {
       }
 
       setAtualizando(true);
+      // Mover o início pela quantidade de dias arrastados (corridos — o usuário escolhe onde quer)
       const novoInicio = addDias(parseDate(drag.at.data_inicio), deltaDias);
-      const dur = diffDias(parseDate(drag.at.data_inicio), parseDate(drag.at.data_fim));
-      const novoFim = addDias(novoInicio, dur);
+      // Recalcular o fim preservando a duração em dias úteis original
+      const duracaoUtil = drag.at.duracao_dias ?? (diffDias(parseDate(drag.at.data_inicio), parseDate(drag.at.data_fim)) + 1);
+      const novoFim = calcDataFimUtil(novoInicio, duracaoUtil);
 
       // Atualizar local imediatamente
       atualizarAtividadeLocal(drag.at.id, {
@@ -761,15 +1016,15 @@ export default function LinhaDeBalanco() {
       data_inicio: toStr(novoInicio), data_fim: toStr(novoFim), linha_index: novaLinha,
     }).eq('id', atOrigem.id);
 
-    // Recalcular as datas dos sucessores em cascata
+    // Recalcular as datas dos sucessores em cascata com dias úteis
     let refFim = novoFim;
     for (const item of cadeia) {
       if (item.id === atOrigem.id) continue;
       if ((item.vinculo_ordem ?? 0) <= (atOrigem.vinculo_ordem ?? 0)) continue;
 
-      const dur = diffDias(parseDate(item.data_inicio), parseDate(item.data_fim));
-      const novaData = addDias(refFim, 1);
-      const novaDataFim = addDias(novaData, dur);
+      const durUtil = item.duracao_dias ?? (diffDias(parseDate(item.data_inicio), parseDate(item.data_fim)) + 1);
+      const novaData = addDiasUteis(refFim, 1, feriadosSet, sabadoUtil, domingoUtil);
+      const novaDataFim = calcDataFimUtil(novaData, durUtil);
 
       await supabase.from('atividades').update({
         data_inicio: toStr(novaData), data_fim: toStr(novaDataFim),
@@ -840,11 +1095,12 @@ export default function LinhaDeBalanco() {
     }
     pavParaCriar.sort((a, b) => (a.numero ?? 0) - (b.numero ?? 0));
 
-    let dataInicioAtual = parseDate(modalCriar.dataInicio);
+    let dataInicioAtual = calcInicioUtil(parseDate(modalCriar.dataInicio));
     let ordem = 0;
 
     for (const pav of pavParaCriar) {
-      const dataFim = addDias(dataInicioAtual, duracaoTotal - 1);
+      // Data fim considera apenas dias úteis
+      const dataFim = calcDataFimUtil(dataInicioAtual, duracaoTotal);
       const { data: novaAt } = await supabase.from('atividades').insert({
         pavimento_id: pav.id,
         nome: formCriar.nome.trim(),
@@ -858,22 +1114,28 @@ export default function LinhaDeBalanco() {
         vinculo_ordem: vinculoId ? ordem++ : null,
       }).select().single();
 
-      // Salvar subatividades se existirem
+      // Salvar subatividades com datas calculadas em dias úteis
       if (novaAt && usarSubs && subsCriar.length > 0) {
+        let dataSubInicio = new Date(dataInicioAtual);
         for (let i = 0; i < subsCriar.length; i++) {
           const s = subsCriar[i];
+          const durSub = parseInt(s.duracao) || 1;
+          const dataSubFim = calcDataFimUtil(dataSubInicio, durSub);
           await supabase.from('subatividades').insert({
             atividade_id: novaAt.id,
             nome: s.nome.trim(),
-            duracao: parseInt(s.duracao) || 1,
+            duracao: durSub,
             equipe: s.equipe.trim() || null,
             efetivo: s.efetivo ? parseInt(s.efetivo) : null,
             ordem: i,
           });
+          // Próxima sub começa no próximo dia útil
+          dataSubInicio = calcProximoInicioUtil(dataSubFim);
         }
       }
 
-      if (vincular && vinculoId) { dataInicioAtual = addDias(dataFim, 1); }
+      // Cascata: próximo pavimento começa no próximo dia útil após o fim
+      if (vincular && vinculoId) { dataInicioAtual = calcProximoInicioUtil(dataFim); }
     }
 
     setModalCriar(null);
@@ -904,15 +1166,32 @@ export default function LinhaDeBalanco() {
     if (!modalEditar) return;
     setSalvandoEdicao(true);
 
-    // Duração: somatório das subs se existirem, senão pelo formulário
+    // Duração: somatório das subs em dias úteis, senão pelo formulário
     let duracao: number;
     let dataFim: string;
 
     if (subsEditar.length > 0) {
       duracao = calcDuracaoTotal(subsEditar.map(s => ({ duracao: parseInt(s.duracao) || 0 })));
-      dataFim = toStr(addDias(parseDate(formEditar.dataInicio), duracao - 1));
+      // data fim = início + duração em dias úteis
+      dataFim = toStr(calcDataFimUtil(parseDate(formEditar.dataInicio), duracao));
     } else {
-      duracao = diffDias(parseDate(formEditar.dataInicio), parseDate(formEditar.dataFim)) + 1;
+      // Se usuário editou manualmente as datas, respeitar
+      // Mas recalcular duração em dias úteis
+      duracao = (() => {
+        let count = 0;
+        const ini = parseDate(formEditar.dataInicio);
+        const fim = parseDate(formEditar.dataFim);
+        const cur = new Date(ini);
+        while (cur <= fim) {
+          if (addDiasUteis(cur, 0, feriadosSet, sabadoUtil, domingoUtil) === cur || true) {
+            const dia = cur.getDay();
+            const s = toStr(cur);
+            if (!feriadosSet.has(s) && !(dia === 6 && !sabadoUtil) && !(dia === 0 && !domingoUtil)) count++;
+          }
+          cur.setDate(cur.getDate() + 1);
+        }
+        return count || 1;
+      })();
       dataFim = formEditar.dataFim;
     }
 
@@ -1275,27 +1554,77 @@ export default function LinhaDeBalanco() {
           </div>
         )}
 
-        {/* Legenda */}
-        {Object.keys(coresCache).length > 0 && (
-          <div className="bg-white rounded-lg border border-slate-200 p-4 mb-4 flex flex-wrap gap-3 items-center">
-            <span className="text-sm font-semibold text-slate-700 mr-2">🎨 Legenda:</span>
-            {Object.entries(coresCache).map(([nome, cor]) => (
-              <div key={nome} className="flex items-center gap-1.5">
-                <div className="w-3 h-3 rounded" style={{ backgroundColor: cor }}></div>
-                <span className="text-xs text-slate-700">{nome}</span>
-              </div>
-            ))}
+        {/* Filtro de Zoom + Legenda Calendário */}
+        <div className="bg-white rounded-lg border border-slate-200 p-3 mb-4 flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold text-slate-600">🔍 Zoom:</span>
+            <input type="date" value={zoomInicio} onChange={e => setZoomInicio(e.target.value)}
+              className="px-2 py-1 border border-slate-300 rounded text-sm text-slate-900 outline-none focus:ring-1 focus:ring-blue-500" />
+            <span className="text-slate-400 text-sm">→</span>
+            <input type="date" value={zoomFim} onChange={e => setZoomFim(e.target.value)}
+              className="px-2 py-1 border border-slate-300 rounded text-sm text-slate-900 outline-none focus:ring-1 focus:ring-blue-500" />
+            {(zoomInicio || zoomFim) && (
+              <button onClick={() => { setZoomInicio(''); setZoomFim(''); }}
+                className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded text-xs font-semibold">✕</button>
+            )}
           </div>
-        )}
+
+          {/* Filtro de pavimentos */}
+          <button onClick={() => setModalFiltros(true)}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
+              pavimentosFiltro.size > 0
+                ? 'bg-blue-600 text-white border-blue-600'
+                : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+            }`}>
+            🏢 Pavimentos {pavimentosFiltro.size > 0 ? `(${pavimentosFiltro.size}/${pavimentosExibidos.length})` : '(todos)'}
+          </button>
+
+          <div className="flex items-center gap-2 ml-auto">
+            {/* Legenda */}
+            <div className="flex items-center gap-2 text-xs text-slate-500">
+              <div className="flex items-center gap-1"><div className="w-3 h-3 rounded" style={{ backgroundColor: 'rgba(99,102,241,0.06)' }}></div><span>Sáb</span></div>
+              <div className="flex items-center gap-1"><div className="w-3 h-3 rounded" style={{ backgroundColor: 'rgba(99,102,241,0.12)' }}></div><span>Dom</span></div>
+              <div className="flex items-center gap-1"><div className="w-3 h-3 rounded" style={{ backgroundColor: 'rgba(239,68,68,0.12)' }}></div><span>Feriado</span></div>
+            </div>
+
+            {/* Imprimir */}
+            <button onClick={handleImprimir}
+              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold border border-slate-300 flex items-center gap-1">
+              🖨️ Imprimir / PDF
+            </button>
+          </div>
+        </div>
 
         {/* Gráfico */}
-        <div className="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden" ref={containerRef}>
-          <div className="p-3 border-b border-slate-200 bg-slate-50 text-xs text-slate-500">
-            📅 {dataMin.toLocaleDateString('pt-BR')} — {addDias(dataMin, totalDias).toLocaleDateString('pt-BR')} &nbsp;|&nbsp; Botão direito para criar ou editar atividades
+        <div id="grafico-print" className="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden" ref={containerRef}>
+          <div className="p-3 border-b border-slate-200 bg-slate-50 text-xs text-slate-500 flex items-center justify-between">
+            <span>📅 {dataMin.toLocaleDateString('pt-BR')} — {addDias(dataMin, totalDias).toLocaleDateString('pt-BR')} &nbsp;|&nbsp; Botão direito para criar ou editar atividades</span>
+            <div className="flex items-center gap-2">
+              {pavimentosFiltro.size > 0 && <span className="text-blue-600 font-medium">🏢 {pavimentosFiltro.size} pavimento(s)</span>}
+              {/* Botão Tela Cheia */}
+              <button
+                onClick={() => setTelaCheia(true)}
+                className="px-3 py-1 bg-slate-700 hover:bg-slate-800 text-white rounded text-xs font-semibold flex items-center gap-1"
+              >
+                ⛶ Tela Cheia
+              </button>
+              {/* Botão Imprimir */}
+              <button
+                onClick={handleImprimir}
+                className="px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-xs font-semibold border border-slate-300 flex items-center gap-1"
+              >
+                🖨️ Imprimir / PDF
+              </button>
+            </div>
           </div>
 
           <div className="overflow-x-auto">
-            <div ref={graficoRef} style={{ minWidth: `${Math.max(800, totalDias * 8)}px`, position: 'relative' }}>
+            {/* Largura: LARGURA_NOME + (36px por dia mínimo, 24px máximo para períodos longos) */}
+            {(() => {
+              const pxPorDia = totalDias <= 30 ? 40 : totalDias <= 60 ? 28 : totalDias <= 120 ? 18 : 10;
+              const larguraTotal = LARGURA_NOME + totalDias * pxPorDia;
+              return (
+            <div ref={graficoRef} style={{ width: `${Math.max(larguraTotal, 900)}px`, position: 'relative' }}>
 
               {/* SVG overlay para linhas de vínculo */}
               {hoverVinculo && linhasVinculo.length > 0 && graficoRef.current && (
@@ -1311,15 +1640,17 @@ export default function LinhaDeBalanco() {
                   </defs>
                   {linhasVinculo.map((l, i) => {
                     const totalW = graficoRef.current!.offsetWidth;
-                    const totalH = graficoRef.current!.scrollHeight || 400;
-                    // X começa após a coluna de nomes
+                    // Clampar X entre LARGURA_NOME e totalW
                     const areaW = totalW - LARGURA_NOME;
-                    const x1 = LARGURA_NOME + l.x1 * areaW;
-                    const x2 = LARGURA_NOME + l.x2 * areaW;
+                    const x1 = LARGURA_NOME + Math.max(0, Math.min(1, l.x1)) * areaW;
+                    const x2 = LARGURA_NOME + Math.max(0, Math.min(1, l.x2)) * areaW;
                     const y1 = l.y1;
                     const y2 = l.y2;
 
-                    // Linha curva bezier para ficar mais elegante
+                    // Se ambos os pontos estão fora da área visível, não renderizar
+                    if (x1 <= LARGURA_NOME && x2 <= LARGURA_NOME) return null;
+                    if (x1 >= totalW && x2 >= totalW) return null;
+
                     const mx = (x1 + x2) / 2;
 
                     return (
@@ -1351,23 +1682,56 @@ export default function LinhaDeBalanco() {
                   })}
                 </svg>
               )}
-              {/* Eixo X */}
-              <div className="flex border-b border-slate-200 bg-slate-50" style={{ height: 32 }}>
+              {/* Eixo X — cabeçalho com dias */}
+              <div className="flex border-b border-slate-200 bg-slate-50" style={{ height: 44 }}>
                 <div style={{ width: LARGURA_NOME, minWidth: LARGURA_NOME }} className="border-r border-slate-200 px-3 flex items-center">
                   <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Pavimento</span>
                 </div>
-                <div className="flex-1 relative">
-                  {marcadores.map((m, i) => (
-                    <div key={i} className="absolute flex flex-col items-center" style={{ left: `${(m.dia / totalDias) * 100}%` }}>
-                      <div className="h-2 w-px bg-slate-300 mt-1"></div>
-                      <span className="text-xs text-slate-500 whitespace-nowrap">{m.label}</span>
-                    </div>
-                  ))}
+                <div className="flex-1 relative overflow-hidden">
+                  {diasCalendario.map((dia, i) => {
+                    const pct = (i / totalDias) * 100;
+                    const diaLabel = LABEL_DIA[dia.getDay()];
+                    const bgCor = corColunaDia(dia, feriadosSet, sabadoUtil, domingoUtil);
+                    const isDom = dia.getDay() === 0;
+                    const isSab = dia.getDay() === 6;
+                    const isFeriado = feriadosSet.has(toStr(dia));
+                    const larguraPct = (1 / totalDias) * 100;
+                    // Só mostrar em zoom <= 60 dias
+                    if (totalDias > 60 && i % 7 !== 0) return null;
+
+                    return (
+                      <div key={i} className="absolute top-0 bottom-0 flex flex-col items-center justify-center"
+                        style={{
+                          left: `${pct}%`,
+                          width: `${larguraPct}%`,
+                          backgroundColor: bgCor,
+                          borderLeft: '1px solid rgba(0,0,0,0.04)',
+                        }}>
+                        {totalDias <= 60 && (
+                          <>
+                            <span className={`text-xs font-bold leading-none ${
+                              isFeriado ? 'text-red-500' :
+                              isDom ? 'text-indigo-600' :
+                              isSab ? 'text-indigo-400' : 'text-slate-500'
+                            }`}>{diaLabel}</span>
+                            <span className="text-xs text-slate-400 leading-none mt-0.5">
+                              {dia.getDate()}
+                            </span>
+                          </>
+                        )}
+                        {totalDias > 60 && i % 7 === 0 && (
+                          <span className="text-xs text-slate-500 whitespace-nowrap">
+                            {dia.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 
               {/* Pavimentos */}
-              {pavimentosExibidos.map((pav, pavIdx) => {
+              {pavimentosFiltrados.map((pav, pavIdx) => {
                 const alturaTotal = pav.numLinhas * ALTURA_LINHA;
                 return (
                   <div key={pav.id} className={`flex border-b border-slate-100 ${pavIdx % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`} style={{ height: alturaTotal }}>
@@ -1404,10 +1768,19 @@ export default function LinhaDeBalanco() {
                         handleContextMenu(e, pav, diaClicado, linhaClicada);
                       }}
                     >
-                      {/* Grade vertical */}
-                      {marcadores.map((m, i) => (
-                        <div key={i} className="absolute top-0 bottom-0 w-px bg-slate-100" style={{ left: `${(m.dia / totalDias) * 100}%` }} />
-                      ))}
+                      {/* Grade vertical diária com cores de FDS/feriados */}
+                      {diasCalendario.map((dia, i) => {
+                        const bgCor = corColunaDia(dia, feriadosSet, sabadoUtil, domingoUtil);
+                        return (
+                          <div key={i} className="absolute top-0 bottom-0 pointer-events-none"
+                            style={{
+                              left: `${(i / totalDias) * 100}%`,
+                              width: `${(1 / totalDias) * 100}%`,
+                              backgroundColor: bgCor || 'transparent',
+                              borderLeft: '1px solid rgba(0,0,0,0.04)',
+                            }} />
+                        );
+                      })}
                       {/* Linhas separadoras */}
                       {Array.from({ length: pav.numLinhas - 1 }, (_, i) => (
                         <div key={i} className="absolute left-0 right-0 border-t border-dashed border-slate-200" style={{ top: (i + 1) * ALTURA_LINHA }} />
@@ -1425,16 +1798,22 @@ export default function LinhaDeBalanco() {
                         const temVinculo = !!at.vinculo_id;
                         const temSubs = (at.subatividades?.length ?? 0) > 0;
 
+                        // Clamp: não deixar barra sair dos limites do zoom
+                        const leftPct = Math.max(0, (dispDia / totalDias) * 100);
+                        const rightPct = Math.min(100, ((dispDia + dur) / totalDias) * 100);
+                        const widthPct = Math.max(0, rightPct - leftPct);
+                        if (widthPct <= 0) return null; // fora do zoom, não renderizar
+
                         return (
                           <div
                             key={at.id}
                             className={`absolute rounded overflow-hidden select-none z-10 ${isDragging ? 'opacity-60 cursor-grabbing z-20' : 'cursor-grab hover:opacity-90'} ${atualizando ? 'pointer-events-none' : ''}`}
                             style={{
-                              left: `${(dispDia / totalDias) * 100}%`,
-                              width: `${(dur / totalDias) * 100}%`,
+                              left: `${leftPct}%`,
+                              width: `${widthPct}%`,
                               top: linhaAt * ALTURA_LINHA + 4,
                               height: ALTURA_LINHA - 8,
-                              minWidth: 20,
+                              minWidth: 4,
                               border: isDragging ? '2px dashed #3B82F6' : temConflito ? '2px solid #EF4444' : temVinculo ? '2px solid rgba(255,255,255,0.5)' : 'none',
                               backgroundColor: cor,
                             }}
@@ -1491,15 +1870,30 @@ export default function LinhaDeBalanco() {
               })}
 
               {/* Área vazia se sem pavimentos */}
-              {pavimentosExibidos.length === 0 && (
+              {pavimentosFiltrados.length === 0 && (
                 <div className="p-16 text-center text-slate-400">
                   <p className="text-4xl mb-3">📊</p>
                   <p>Nenhum pavimento cadastrado</p>
                 </div>
               )}
             </div>
+            );
+            })()}
           </div>
         </div>
+
+        {/* Legenda — após o gráfico */}
+        {Object.keys(coresCache).length > 0 && (
+          <div className="mt-4 bg-white rounded-lg border border-slate-200 p-4 flex flex-wrap gap-3 items-center">
+            <span className="text-sm font-semibold text-slate-700 mr-2">🎨 Legenda:</span>
+            {Object.entries(coresCache).map(([nome, cor]) => (
+              <div key={nome} className="flex items-center gap-1.5">
+                <div className="w-3 h-3 rounded" style={{ backgroundColor: cor }}></div>
+                <span className="text-xs text-slate-700">{nome}</span>
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* Info */}
         <div className="mt-4 bg-blue-50 border border-blue-200 rounded-lg p-4">
@@ -1664,8 +2058,8 @@ export default function LinhaDeBalanco() {
                   ))}
                   {subsCriar.length > 0 && (
                     <div className="bg-blue-50 rounded p-2 text-xs text-blue-700 font-semibold">
-                      ⏱️ Duração total: {calcDuracaoTotal(subsCriar.map(s => ({ duracao: parseInt(s.duracao)||0 })))} dias
-                      &nbsp;·&nbsp; 📅 Até {fmtDate(toStr(addDias(parseDate(modalCriar.dataInicio), calcDuracaoTotal(subsCriar.map(s => ({ duracao: parseInt(s.duracao)||0 }))) - 1)))}
+                      ⏱️ {calcDuracaoTotal(subsCriar.map(s => ({ duracao: parseInt(s.duracao)||0 })))} dias úteis
+                      &nbsp;·&nbsp; 📅 Até {fmtDate(toStr(calcDataFimUtil(parseDate(modalCriar.dataInicio), calcDuracaoTotal(subsCriar.map(s => ({ duracao: parseInt(s.duracao)||0 }))))))}
                     </div>
                   )}
                 </div>
@@ -1694,7 +2088,14 @@ export default function LinhaDeBalanco() {
               {/* Preview data (sem subs) */}
               {!usarSubs && (
                 <div className="bg-slate-50 rounded-lg p-3 text-sm text-slate-600">
-                  📅 <strong>{fmtDate(modalCriar.dataInicio)}</strong> até <strong>{fmtDate(toStr(addDias(parseDate(modalCriar.dataInicio), (parseInt(formCriar.duracao) || 1) - 1)))}</strong>
+                  {(() => {
+                    const ini = calcInicioUtil(parseDate(modalCriar.dataInicio));
+                    const fim = calcDataFimUtil(ini, parseInt(formCriar.duracao) || 1);
+                    return <>📅 <strong>{fmtDate(toStr(ini))}</strong> até <strong>{fmtDate(toStr(fim))}</strong>
+                      {(!sabadoUtil || !domingoUtil || feriadosSet.size > 0) && (
+                        <span className="text-xs text-blue-600 ml-2">(dias úteis)</span>
+                      )}</>;
+                  })()}
                 </div>
               )}
 
@@ -1864,8 +2265,8 @@ export default function LinhaDeBalanco() {
 
                 {subsEditar.length > 0 && (
                   <div className="bg-blue-50 rounded p-2 text-xs text-blue-700 font-semibold">
-                    ⏱️ Duração total: {calcDuracaoTotal(subsEditar.map(s => ({ duracao: parseInt(s.duracao)||0 })))} dias
-                    &nbsp;·&nbsp; 📅 Até {fmtDate(toStr(addDias(parseDate(formEditar.dataInicio), calcDuracaoTotal(subsEditar.map(s => ({ duracao: parseInt(s.duracao)||0 }))) - 1)))}
+                    ⏱️ {calcDuracaoTotal(subsEditar.map(s => ({ duracao: parseInt(s.duracao)||0 })))} dias úteis
+                    &nbsp;·&nbsp; 📅 Até {fmtDate(toStr(calcDataFimUtil(parseDate(formEditar.dataInicio), calcDuracaoTotal(subsEditar.map(s => ({ duracao: parseInt(s.duracao)||0 }))))))}
                   </div>
                 )}
               </div>
@@ -1942,6 +2343,236 @@ export default function LinhaDeBalanco() {
               className="w-full mt-4 px-4 py-2 border border-slate-300 text-slate-700 rounded-lg font-semibold hover:bg-slate-50">
               Cancelar
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Modal Filtros de Pavimentos ─── */}
+      {modalFiltros && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl shadow-2xl p-6 max-w-md w-full mx-4 max-h-[80vh] flex flex-col">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-bold text-slate-900">🏢 Filtrar Pavimentos</h3>
+              <div className="flex gap-2">
+                <button onClick={() => setPavimentosFiltro(new Set())}
+                  className="px-2 py-1 text-xs text-blue-600 hover:underline">Todos</button>
+                <button onClick={() => setPavimentosFiltro(new Set(pavimentosExibidos.map(p => p.id)))}
+                  className="px-2 py-1 text-xs text-slate-500 hover:underline">Nenhum</button>
+              </div>
+            </div>
+
+            {/* Agrupar por bloco */}
+            <div className="overflow-y-auto flex-1 space-y-3">
+              {(() => {
+                const grupos: Record<string, PavComAtiv[]> = {};
+                pavimentosExibidos.forEach(p => {
+                  const b = p.blocoNome || 'Sem Bloco';
+                  if (!grupos[b]) grupos[b] = [];
+                  grupos[b].push(p);
+                });
+                return Object.entries(grupos).map(([bloco, pavs]) => (
+                  <div key={bloco} className="border border-slate-200 rounded-lg overflow-hidden">
+                    <div className="bg-slate-50 px-3 py-2 flex items-center justify-between">
+                      <span className="font-semibold text-slate-700 text-sm">🏢 {bloco}</span>
+                      <button
+                        onClick={() => {
+                          const ids = pavs.map(p => p.id);
+                          const todosAtivos = ids.every(id => pavimentosFiltro.size === 0 || pavimentosFiltro.has(id));
+                          setPavimentosFiltro(prev => {
+                            const next = new Set(prev.size === 0 ? pavimentosExibidos.map(p => p.id) : prev);
+                            if (todosAtivos) ids.forEach(id => next.delete(id));
+                            else ids.forEach(id => next.add(id));
+                            return next.size === pavimentosExibidos.length ? new Set() : next;
+                          });
+                        }}
+                        className="text-xs text-blue-600 hover:underline">
+                        {pavs.every(p => pavimentosFiltro.size === 0 || pavimentosFiltro.has(p.id)) ? 'Remover bloco' : 'Adicionar bloco'}
+                      </button>
+                    </div>
+                    <div className="divide-y divide-slate-100">
+                      {pavs.map(pav => {
+                        const ativo = pavimentosFiltro.size === 0 || pavimentosFiltro.has(pav.id);
+                        const nomeSufixo = pav.nome.includes(' - ') ? pav.nome.split(' - ').slice(1).join(' - ') : pav.nome;
+                        return (
+                          <label key={pav.id} className="flex items-center gap-3 px-3 py-2 hover:bg-slate-50 cursor-pointer">
+                            <input type="checkbox" checked={ativo}
+                              onChange={() => {
+                                setPavimentosFiltro(prev => {
+                                  // se vazio = todos ativos, expandir para set completo menos este
+                                  const base = prev.size === 0
+                                    ? new Set(pavimentosExibidos.map(p => p.id))
+                                    : new Set(prev);
+                                  if (base.has(pav.id)) base.delete(pav.id);
+                                  else base.add(pav.id);
+                                  // se todos marcados, volta para vazio (= todos)
+                                  return base.size === pavimentosExibidos.length ? new Set() : base;
+                                });
+                              }}
+                              className="w-4 h-4 rounded accent-blue-600" />
+                            <span className="text-sm text-slate-700">{nomeSufixo}</span>
+                            {pav.numero !== null && <span className="text-xs text-slate-400 ml-auto">Nº {pav.numero}</span>}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ));
+              })()}
+            </div>
+
+            <div className="flex gap-3 mt-4">
+              <button onClick={() => { setPavimentosFiltro(new Set()); setModalFiltros(false); }}
+                className="flex-1 px-4 py-2 border border-slate-300 text-slate-700 rounded-lg font-semibold hover:bg-slate-50">
+                Limpar Filtros
+              </button>
+              <button onClick={() => setModalFiltros(false)}
+                className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold">
+                Aplicar ({pavimentosFiltro.size === 0 ? 'todos' : pavimentosFiltro.size})
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Overlay Tela Cheia ─── */}
+      {telaCheia && (
+        <div className="fixed inset-0 bg-white z-[100] flex flex-col">
+          {/* Header tela cheia */}
+          <div className="flex items-center justify-between px-6 py-3 border-b border-slate-200 bg-white shadow-sm flex-shrink-0">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center"><span className="text-white text-sm">📊</span></div>
+              <div>
+                <p className="font-bold text-slate-900">{obra?.nome} — Linha de Balanço</p>
+                <p className="text-xs text-slate-500">{dataMin.toLocaleDateString('pt-BR')} → {addDias(dataMin, totalDias).toLocaleDateString('pt-BR')}</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              {/* Zoom */}
+              <input type="date" value={zoomInicio} onChange={e => setZoomInicio(e.target.value)}
+                className="px-2 py-1.5 border border-slate-300 rounded text-sm text-slate-900 outline-none" />
+              <span className="text-slate-400">→</span>
+              <input type="date" value={zoomFim} onChange={e => setZoomFim(e.target.value)}
+                className="px-2 py-1.5 border border-slate-300 rounded text-sm text-slate-900 outline-none" />
+              {(zoomInicio || zoomFim) && (
+                <button onClick={() => { setZoomInicio(''); setZoomFim(''); }}
+                  className="px-2 py-1 bg-slate-100 text-slate-600 rounded text-xs font-semibold">✕</button>
+              )}
+              <div className="w-px h-6 bg-slate-200 mx-1"></div>
+              {/* Filtro pavimentos */}
+              <button onClick={() => setModalFiltros(true)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${pavimentosFiltro.size > 0 ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'}`}>
+                🏢 {pavimentosFiltro.size > 0 ? `${pavimentosFiltro.size} pavtos` : 'Todos'}
+              </button>
+              {/* Imprimir */}
+              <button onClick={handleImprimir}
+                className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold border border-slate-300">
+                🖨️ Imprimir
+              </button>
+              {/* Fechar */}
+              <button onClick={() => setTelaCheia(false)}
+                className="px-3 py-1.5 bg-red-100 hover:bg-red-200 text-red-700 rounded-lg text-xs font-semibold border border-red-200">
+                ✕ Fechar
+              </button>
+            </div>
+          </div>
+
+          {/* Legenda */}
+          <div className="flex items-center gap-4 px-6 py-2 bg-slate-50 border-b border-slate-200 flex-shrink-0 text-xs text-slate-500 flex-wrap">
+            {Object.entries(coresCache).map(([nome, cor]) => (
+              <div key={nome} className="flex items-center gap-1.5">
+                <div className="w-3 h-3 rounded" style={{ backgroundColor: cor }}></div>
+                <span>{nome}</span>
+              </div>
+            ))}
+            <div className="ml-auto flex items-center gap-3">
+              <div className="flex items-center gap-1"><div className="w-3 h-3 rounded" style={{ backgroundColor: 'rgba(99,102,241,0.06)' }}></div><span>Sáb</span></div>
+              <div className="flex items-center gap-1"><div className="w-3 h-3 rounded" style={{ backgroundColor: 'rgba(99,102,241,0.12)' }}></div><span>Dom</span></div>
+              <div className="flex items-center gap-1"><div className="w-3 h-3 rounded" style={{ backgroundColor: 'rgba(239,68,68,0.12)' }}></div><span>Feriado</span></div>
+            </div>
+          </div>
+
+          {/* Gráfico em tela cheia */}
+          <div className="flex-1 overflow-auto" id="grafico-print">
+            {(() => {
+              const pxPorDia = totalDias <= 30 ? 44 : totalDias <= 60 ? 30 : totalDias <= 120 ? 20 : 12;
+              const larguraTotal = LARGURA_NOME + totalDias * pxPorDia;
+              return (
+                <div style={{ width: `${Math.max(larguraTotal, window.innerWidth - 40)}px`, position: 'relative', minHeight: '100%' }}>
+                  {/* Eixo X */}
+                  <div className="flex border-b border-slate-200 bg-slate-50 sticky top-0 z-10" style={{ height: 44 }}>
+                    <div style={{ width: LARGURA_NOME, minWidth: LARGURA_NOME }} className="border-r border-slate-200 px-3 flex items-center bg-slate-50">
+                      <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Pavimento</span>
+                    </div>
+                    <div className="flex-1 relative overflow-hidden">
+                      {diasCalendario.map((dia, i) => {
+                        const pct = (i / totalDias) * 100;
+                        const bgCor = corColunaDia(dia, feriadosSet, sabadoUtil, domingoUtil);
+                        const isDom = dia.getDay() === 0;
+                        const isSab = dia.getDay() === 6;
+                        const isFer = feriadosSet.has(toStr(dia));
+                        const larg = (1 / totalDias) * 100;
+                        return (
+                          <div key={i} className="absolute top-0 bottom-0 flex flex-col items-center justify-center"
+                            style={{ left: `${pct}%`, width: `${larg}%`, backgroundColor: bgCor, borderLeft: '1px solid rgba(0,0,0,0.04)' }}>
+                            <span className={`text-xs font-bold leading-none ${isFer ? 'text-red-500' : isDom ? 'text-indigo-600' : isSab ? 'text-indigo-400' : 'text-slate-500'}`}>
+                              {LABEL_DIA[dia.getDay()]}
+                            </span>
+                            <span className="text-xs text-slate-400 leading-none mt-0.5">{dia.getDate()}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Linhas */}
+                  {pavimentosFiltrados.map((pav, pavIdx) => (
+                    <div key={pav.id} className={`flex border-b border-slate-100 ${pavIdx % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`}
+                      style={{ height: pav.numLinhas * ALTURA_LINHA }}>
+                      <div style={{ width: LARGURA_NOME, minWidth: LARGURA_NOME }}
+                        className="border-r border-slate-200 px-3 flex flex-col justify-center">
+                        <p className="text-xs font-semibold text-slate-800 truncate">{pav.nome}</p>
+                        {pav.numero !== null && <p className="text-xs text-slate-400">Nº {pav.numero}</p>}
+                      </div>
+                      <div className="flex-1 relative">
+                        {diasCalendario.map((dia, i) => {
+                          const bgCor = corColunaDia(dia, feriadosSet, sabadoUtil, domingoUtil);
+                          return bgCor ? <div key={i} className="absolute top-0 bottom-0 pointer-events-none"
+                            style={{ left: `${(i/totalDias)*100}%`, width: `${(1/totalDias)*100}%`, backgroundColor: bgCor }} /> : null;
+                        })}
+                        {Array.from({ length: pav.numLinhas - 1 }, (_, i) => (
+                          <div key={i} className="absolute left-0 right-0 border-t border-dashed border-slate-200" style={{ top: (i+1)*ALTURA_LINHA }} />
+                        ))}
+                        {pav.atividades.map(at => {
+                          const dispDia = diffDias(dataMin, parseDate(at.data_inicio));
+                          const dur = diffDias(parseDate(at.data_inicio), parseDate(at.data_fim)) + 1;
+                          const leftPct = Math.max(0, (dispDia / totalDias) * 100);
+                          const widthPct = Math.max(0, Math.min(100, ((dispDia + dur) / totalDias) * 100) - leftPct);
+                          if (widthPct <= 0) return null;
+                          const cor = getCor(at.nome);
+                          const linhaAt = at.linha_index ?? 0;
+                          return (
+                            <div key={at.id} className="absolute rounded overflow-hidden select-none"
+                              style={{ left: `${leftPct}%`, width: `${widthPct}%`, top: linhaAt*ALTURA_LINHA+4, height: ALTURA_LINHA-8, backgroundColor: cor, minWidth: 4 }}>
+                              <div className="absolute inset-x-0 top-0 flex items-center px-2 bottom-0">
+                                <span className="text-white text-xs font-semibold truncate drop-shadow">{at.nome}</span>
+                              </div>
+                              {(at.subatividades?.length ?? 0) > 0 && (
+                                <div className="absolute inset-x-0 bottom-0 flex" style={{ height: '40%' }}>
+                                  {at.subatividades!.map((s, i) => {
+                                    const durT = at.subatividades!.reduce((a,b) => a+(b.duracao||0), 0);
+                                    return <div key={s.id} className="h-full" style={{ width: `${(s.duracao/durT)*100}%`, backgroundColor: s.cor || getCorSub(at.nome,i), borderLeft: i>0?'1px solid rgba(255,255,255,0.4)':'none' }} />;
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
           </div>
         </div>
       )}
