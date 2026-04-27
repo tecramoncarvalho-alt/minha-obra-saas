@@ -256,6 +256,7 @@ export default function Dashboard() {
   const periodoRelatorio = useMemo(() => {
     const d = parseDate(dataSelecionada);
     if (tipoRelatorio === 'dia') {
+      // Mesmo critério do dashboard: data selecionada está dentro do intervalo da atividade
       return { inicio: dataSelecionada, fim: dataSelecionada, label: `Dia ${fmtDate(dataSelecionada)}` };
     } else if (tipoRelatorio === 'semana') {
       const dom = new Date(d); dom.setDate(d.getDate() - d.getDay());
@@ -268,34 +269,59 @@ export default function Dashboard() {
     }
   }, [dataSelecionada, tipoRelatorio]);
 
-  const atividadesRelatorio = useMemo(() =>
-    atividadesEfetivas.filter(a => estaNoIntervalo(dataSelecionada, a.data_inicio, a.data_fim) ||
-      (parseDate(a.data_inicio) <= parseDate(periodoRelatorio.fim) && parseDate(a.data_fim) >= parseDate(periodoRelatorio.inicio))
-    ), [atividadesEfetivas, periodoRelatorio]);
+  // ─── Atividades do período do relatório (mesma lógica do dashboard) ───
+  const atividadesRelatorio = useMemo(() => {
+    return atividadesEfetivas.filter(a =>
+      parseDate(a.data_inicio) <= parseDate(periodoRelatorio.fim) &&
+      parseDate(a.data_fim) >= parseDate(periodoRelatorio.inicio)
+    );
+  }, [atividadesEfetivas, periodoRelatorio]);
 
   const dadosRelatorio = useMemo(() => {
-    // Por equipe
-    const equipes: Record<string, { efetivo: number; atividades: {nome: string; pavimento: string; inicio: string; fim: string; duracao: number; subNome?: string}[] }> = {};
+    // Reutilizar EXATAMENTE a mesma lógica do efetivoDoDia
+    const mapa: Record<string, { equipe: string; efetivo: number; atividades: {nome: string; pavimento: string; inicio: string; fim: string; duracao: number; subNome?: string}[] }> = {};
+
+    const garantirEquipe = (chave: string) => {
+      if (!mapa[chave]) mapa[chave] = { equipe: chave, efetivo: 0, atividades: [] };
+    };
+
     atividadesRelatorio.forEach(at => {
       const nomePav = at.pavimento?.nome || 'Sem pavimento';
-      const addEquipe = (eq: string, ef: number, subN?: string) => {
-        if (!equipes[eq]) equipes[eq] = { efetivo: 0, atividades: [] };
-        equipes[eq].efetivo = Math.max(equipes[eq].efetivo, ef);
-        const jaExiste = equipes[eq].atividades.find(a => a.nome === at.nome && a.pavimento === nomePav);
-        if (!jaExiste) equipes[eq].atividades.push({
+
+      if (at.subatividades && at.subatividades.length > 0) {
+        // Mesma lógica do efetivoDoDia — agrupar subs por equipe, somar efetivo
+        const subsPorEquipe: Record<string, { efetivo: number; nomes: string[] }> = {};
+        at.subatividades.forEach(sub => {
+          const equipeChave = sub.equipe?.trim() || at.equipe?.trim() || 'Sem equipe';
+          if (!subsPorEquipe[equipeChave]) subsPorEquipe[equipeChave] = { efetivo: 0, nomes: [] };
+          if (sub.efetivo && sub.efetivo > 0) subsPorEquipe[equipeChave].efetivo += sub.efetivo;
+          subsPorEquipe[equipeChave].nomes.push(sub.nome);
+        });
+
+        Object.entries(subsPorEquipe).forEach(([equipeChave, dados]) => {
+          garantirEquipe(equipeChave);
+          mapa[equipeChave].efetivo += dados.efetivo;
+          mapa[equipeChave].atividades.push({
+            nome: at.nome, pavimento: nomePav,
+            inicio: at.data_inicio, fim: at.data_fim,
+            duracao: at.duracao_dias ?? 0,
+            subNome: dados.nomes.join(', '),
+          });
+        });
+      } else {
+        // Atividade simples — mesma lógica do efetivoDoDia
+        const equipeChave = at.equipe?.trim() || 'Sem equipe';
+        garantirEquipe(equipeChave);
+        if (at.efetivo && at.efetivo > 0) mapa[equipeChave].efetivo += at.efetivo;
+        mapa[equipeChave].atividades.push({
           nome: at.nome, pavimento: nomePav,
           inicio: at.data_inicio, fim: at.data_fim,
-          duracao: at.duracao_dias ?? 0, subNome: subN,
+          duracao: at.duracao_dias ?? 0,
         });
-      };
-      if (at.subatividades?.length > 0) {
-        at.subatividades.forEach(s => addEquipe(s.equipe?.trim() || at.equipe?.trim() || 'Sem equipe', s.efetivo || 0, s.nome));
-      } else {
-        addEquipe(at.equipe?.trim() || 'Sem equipe', at.efetivo || 0);
       }
     });
 
-    // Por bloco
+    // Por bloco (para o relatório impresso)
     const blocos: Record<string, Atividade[]> = {};
     atividadesRelatorio.forEach(at => {
       const bloco = at.pavimento?.nome?.includes(' - ')
@@ -305,8 +331,8 @@ export default function Dashboard() {
       if (!blocos[bloco].find(a => a.id === at.id)) blocos[bloco].push(at);
     });
 
-    const totalEf = Object.values(equipes).reduce((acc, e) => acc + e.efetivo, 0);
-    return { equipes, blocos, totalEfetivo: totalEf, totalAtividades: atividadesRelatorio.length };
+    const totalEf = Object.values(mapa).reduce((acc, e) => acc + e.efetivo, 0);
+    return { equipes: mapa, blocos, totalEfetivo: totalEf, totalAtividades: atividadesRelatorio.length };
   }, [atividadesRelatorio]);
 
   // ─── Exportar Excel (CSV) ───

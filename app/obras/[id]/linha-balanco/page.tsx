@@ -312,28 +312,31 @@ export default function LinhaDeBalanco() {
   // Propaga movimento de cadeia vinculada no estado local
   const propagarVinculoLocal = (vinculoId: string, atOrigemId: number, deltaDias: number) => {
     setPavimentos(prev => {
-      // Coletar cadeia ordenada
+      const { feriadosSet: fs, sabadoUtil: su, domingoUtil: du } = calendarioRef.current;
+
       const cadeia: Atividade[] = [];
       prev.forEach(pav => pav.atividades.forEach(at => {
         if (at.vinculo_id === vinculoId) cadeia.push(at);
       }));
       cadeia.sort((a, b) => (a.vinculo_ordem ?? 0) - (b.vinculo_ordem ?? 0));
 
-      // Encontrar índice da origem
       const idxOrigem = cadeia.findIndex(a => a.id === atOrigemId);
       if (idxOrigem < 0) return prev;
 
-      // Recalcular datas dos sucessores em dias úteis
       const novasDatas: Record<number, { inicio: string; fim: string }> = {};
       for (let i = idxOrigem; i < cadeia.length; i++) {
         const at = cadeia[i];
-        const durUtil = at.duracao_dias ?? diffDias(parseDate(at.data_inicio), parseDate(at.data_fim)) + 1;
+        const durUtil = at.duracao_dias ?? (diffDias(parseDate(at.data_inicio), parseDate(at.data_fim)) + 1);
         if (i === idxOrigem) {
-          const ni = addDiasUteis(parseDate(at.data_inicio), deltaDias, feriadosSet, sabadoUtil, domingoUtil);
-          novasDatas[at.id] = { inicio: toStr(ni), fim: toStr(calcDataFimUtil(ni, durUtil)) };
+          // Origem: mover por deltaDias corridos (posição no grid)
+          const ni = addDias(parseDate(at.data_inicio), deltaDias);
+          // Calcular fim com dias úteis
+          const fim = calcDataFimUtil(ni, durUtil);
+          novasDatas[at.id] = { inicio: toStr(ni), fim: toStr(fim) };
         } else {
+          // Sucessores: começar no próximo dia útil após o fim do anterior
           const antFim = parseDate(novasDatas[cadeia[i-1].id].fim);
-          const ni = addDiasUteis(antFim, 1, feriadosSet, sabadoUtil, domingoUtil);
+          const ni = addDiasUteis(antFim, 1, fs, su, du);
           novasDatas[at.id] = { inicio: toStr(ni), fim: toStr(calcDataFimUtil(ni, durUtil)) };
         }
       }
@@ -954,25 +957,27 @@ export default function LinhaDeBalanco() {
       }
 
       setAtualizando(true);
-      // Mover o início pela quantidade de dias arrastados (corridos — o usuário escolhe onde quer)
       const novoInicio = addDias(parseDate(drag.at.data_inicio), deltaDias);
-      // Recalcular o fim preservando a duração em dias úteis original
       const duracaoUtil = drag.at.duracao_dias ?? (diffDias(parseDate(drag.at.data_inicio), parseDate(drag.at.data_fim)) + 1);
       const novoFim = calcDataFimUtil(novoInicio, duracaoUtil);
 
-      // Atualizar local imediatamente
-      atualizarAtividadeLocal(drag.at.id, {
-        data_inicio: toStr(novoInicio),
-        data_fim: toStr(novoFim),
-        linha_index: novaLinha,
-      });
-
-      // Se tem vínculo e movimento horizontal, propagar cadeia localmente
       if (drag.at.vinculo_id && deltaDias !== 0) {
+        // Com vínculo: propagarVinculoLocal move TODA a cadeia (incluindo a origem)
+        // NÃO chamar atualizarAtividadeLocal antes — evita duplo movimento
         propagarVinculoLocal(drag.at.vinculo_id, drag.at.id, deltaDias);
-        // Salvar no banco em background (toda a cadeia)
+        // Atualizar linha_index localmente só se mudou (propagarVinculoLocal não muda linha)
+        if (novaLinha !== drag.startLinha) {
+          atualizarAtividadeLocal(drag.at.id, { linha_index: novaLinha });
+        }
+        // Salvar no banco em background
         await propagarVinculo(drag.at, deltaDias, novaLinha, novoInicio, novoFim);
       } else {
+        // Sem vínculo: atualizar só a atividade arrastada
+        atualizarAtividadeLocal(drag.at.id, {
+          data_inicio: toStr(novoInicio),
+          data_fim: toStr(novoFim),
+          linha_index: novaLinha,
+        });
         await supabase.from('atividades').update({
           data_inicio: toStr(novoInicio), data_fim: toStr(novoFim), linha_index: novaLinha,
         }).eq('id', drag.at.id);
@@ -1269,18 +1274,69 @@ export default function LinhaDeBalanco() {
     setTimeout(() => setMensagem(null), 3000);
   };
 
-  // ─── Excluir atividade ───
-  const handleExcluirAtividade = async () => {
+  // ─── Excluir atividade — com modal de vínculo ───
+  const [modalExcluirAt, setModalExcluirAt] = useState<{
+    at: Atividade;
+    cadeia: { at: Atividade; pav: PavComAtiv; mesmoLote: boolean }[];
+    vinculoId: string | null;
+  } | null>(null);
+  const [excluindoAtModal, setExcluindoAtModal] = useState(false);
+
+  const abrirExcluirAtividade = () => {
     if (!modalEditar) return;
-    if (!confirm(`Excluir "${modalEditar.at.nome}"?`)) return;
-    setExcluindoAt(true);
-    await supabase.from('atividades').delete().eq('id', modalEditar.at.id);
-    // Remover do estado local imediatamente
-    removerAtividadeLocal(modalEditar.at.id);
+    const at = modalEditar.at;
+    const vinculoId = at.vinculo_id || null;
+
+    if (!vinculoId) {
+      // Sem vínculo — excluir direto com confirm simples
+      if (!confirm(`Excluir "${at.nome}"?`)) return;
+      excluirAtividadesIds([at.id]);
+      return;
+    }
+
+    // Coletar cadeia completa
+    const cadeia: { at: Atividade; pav: PavComAtiv; mesmoLote: boolean }[] = [];
+
+    // vinculo_ordem da atividade sendo excluída
+    const ordemAtual = at.vinculo_ordem ?? 0;
+
+    pavimentosExibidos.forEach(pav => {
+      pav.atividades.forEach(a => {
+        if (a.vinculo_id === vinculoId && a.id !== at.id) {
+          // "mesmo lote" = criada junto (ordem contígua) vs vinculada manualmente depois
+          const mesmoLote = Math.abs((a.vinculo_ordem ?? 0) - ordemAtual) === 1
+            || a.nome === at.nome; // mesmo nome = criada em cascata
+          cadeia.push({ at: a, pav, mesmoLote });
+        }
+      });
+    });
+
+    cadeia.sort((a, b) => (a.at.vinculo_ordem ?? 0) - (b.at.vinculo_ordem ?? 0));
     setModalEditar(null);
-    setExcluindoAt(false);
-    setMensagem({ tipo: 'success', texto: '✅ Atividade excluída!' });
-    setTimeout(() => setMensagem(null), 3000);
+    setModalExcluirAt({ at, cadeia, vinculoId });
+  };
+
+  const excluirAtividadesIds = async (ids: number[], desvinculaIds?: number[]) => {
+    setExcluindoAtModal(true);
+    try {
+      for (const id of ids) {
+        await supabase.from('subatividades').delete().eq('atividade_id', id);
+        await supabase.from('atividades').delete().eq('id', id);
+        removerAtividadeLocal(id);
+      }
+      // Só desvincula se explicitamente passado (lista não-vazia)
+      if (desvinculaIds && desvinculaIds.length > 0) {
+        for (const id of desvinculaIds) {
+          await supabase.from('atividades').update({ vinculo_id: null, vinculo_ordem: null }).eq('id', id);
+          atualizarAtividadeLocal(id, { vinculo_id: null, vinculo_ordem: null });
+        }
+      }
+      setModalExcluirAt(null);
+      setMensagem({ tipo: 'success', texto: `✅ ${ids.length} atividade(s) excluída(s)!` });
+      setTimeout(() => setMensagem(null), 3000);
+    } finally {
+      setExcluindoAtModal(false);
+    }
   };
 
   // ─── Quebrar vínculo ───
@@ -1299,21 +1355,43 @@ export default function LinhaDeBalanco() {
 
   const handleReativarVinculo = async (atAlvo: Atividade) => {
     if (!modalEditar) return;
-    const novoVinculoId = gerarUUID();
-    const atA = modalEditar.at;
-    const [primeiro, segundo] = parseDate(atA.data_fim) <= parseDate(atAlvo.data_inicio) ? [atA, atAlvo] : [atAlvo, atA];
+    const atOrigem = modalEditar.at; // atividade que está sendo vinculada
 
-    await supabase.from('atividades').update({ vinculo_id: novoVinculoId, vinculo_ordem: 0 }).eq('id', primeiro.id);
-    await supabase.from('atividades').update({ vinculo_id: novoVinculoId, vinculo_ordem: 1 }).eq('id', segundo.id);
+    // Coletar cadeias envolvidas
+    const cadeiaAlvo = atAlvo.vinculo_id
+      ? pavimentosExibidos.flatMap(p => p.atividades).filter(a => a.vinculo_id === atAlvo.vinculo_id)
+        .sort((a, b) => (a.vinculo_ordem ?? 0) - (b.vinculo_ordem ?? 0))
+      : [atAlvo];
 
-    // Atualizar local
-    atualizarAtividadeLocal(primeiro.id, { vinculo_id: novoVinculoId, vinculo_ordem: 0 });
-    atualizarAtividadeLocal(segundo.id, { vinculo_id: novoVinculoId, vinculo_ordem: 1 });
+    const cadeiaOrigem = atOrigem.vinculo_id
+      ? pavimentosExibidos.flatMap(p => p.atividades).filter(a => a.vinculo_id === atOrigem.vinculo_id)
+        .sort((a, b) => (a.vinculo_ordem ?? 0) - (b.vinculo_ordem ?? 0))
+      : [atOrigem];
+
+    // ─── Caso: atAlvo tem cadeia → inserir cadeiaOrigem no final da cadeiaAlvo ───
+    // Determinar posição de inserção: após atAlvo na cadeia
+    const idxAlvoNaCadeia = cadeiaAlvo.findIndex(a => a.id === atAlvo.id);
+    const cadeiaAntes = cadeiaAlvo.slice(0, idxAlvoNaCadeia + 1); // itens até atAlvo (inclusive)
+    const cadeiaDepois = cadeiaAlvo.slice(idxAlvoNaCadeia + 1);   // itens após atAlvo
+
+    // Nova cadeia: [antes...] + [cadeiaOrigem...] + [depois...]
+    const novaCadeia = [...cadeiaAntes, ...cadeiaOrigem, ...cadeiaDepois];
+
+    // Usar o vinculo_id da cadeiaAlvo (ou criar novo se nenhuma tem)
+    const vinculoId = atAlvo.vinculo_id || atOrigem.vinculo_id || gerarUUID();
+
+    // Salvar nova ordem no banco
+    for (let i = 0; i < novaCadeia.length; i++) {
+      await supabase.from('atividades')
+        .update({ vinculo_id: vinculoId, vinculo_ordem: i })
+        .eq('id', novaCadeia[i].id);
+      atualizarAtividadeLocal(novaCadeia[i].id, { vinculo_id: vinculoId, vinculo_ordem: i });
+    }
 
     setModalVincular(null);
     setModalEditar(null);
-    setMensagem({ tipo: 'success', texto: '✅ Vínculo reativado!' });
-    setTimeout(() => setMensagem(null), 3000);
+    setMensagem({ tipo: 'success', texto: `✅ Vínculo criado! Cadeia com ${novaCadeia.length} atividades.` });
+    setTimeout(() => setMensagem(null), 4000);
   };
 
   // ─── Editar linhas do bloco ───
@@ -2302,7 +2380,7 @@ export default function LinhaDeBalanco() {
             </div>
 
             <div className="flex gap-2 mt-6">
-              <button onClick={handleExcluirAtividade} disabled={excluindoAt || salvandoEdicao}
+              <button onClick={abrirExcluirAtividade} disabled={excluindoAt || salvandoEdicao}
                 className="px-3 py-2 bg-red-100 text-red-700 rounded-lg font-semibold hover:bg-red-200 text-sm">
                 {excluindoAt ? '⏳' : '🗑️'}
               </button>
@@ -2322,25 +2400,107 @@ export default function LinhaDeBalanco() {
       {/* ─── Modal Reativar Vínculo ─── */}
       {modalVincular && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl shadow-2xl p-6 max-w-md w-full mx-4">
-            <h3 className="text-lg font-bold text-slate-900 mb-1">🔗 Vincular Atividade</h3>
-            <p className="text-xs text-slate-500 mb-4">Selecione a atividade que deve preceder <strong>{modalVincular.at.nome}</strong></p>
+          <div className="bg-white rounded-xl shadow-2xl p-6 max-w-lg w-full mx-4 max-h-[85vh] flex flex-col">
+            <h3 className="text-lg font-bold text-slate-900 mb-1">🔗 Vincular Manualmente</h3>
+            <p className="text-xs text-slate-500 mb-1">
+              Selecione a atividade que deve <strong>preceder</strong> <span className="text-purple-600 font-semibold">"{modalVincular.at.nome}"</span>
+            </p>
+            {modalVincular.at.vinculo_id && (
+              <div className="text-xs text-blue-700 bg-blue-50 rounded-lg px-3 py-2 mb-3">
+                ℹ️ Esta atividade já faz parte de uma cadeia — ela e seu grupo serão inseridos após a atividade selecionada
+              </div>
+            )}
 
-            <div className="space-y-2 max-h-64 overflow-y-auto">
-              {pavimentosExibidos.flatMap(pav => pav.atividades
-                .filter(a => a.id !== modalVincular.at.id)
-                .map(at => ({ at, pav }))
-              ).map(({ at, pav }) => (
-                <button key={at.id} onClick={() => handleReativarVinculo(at)}
-                  className="w-full text-left p-3 border border-slate-200 rounded-lg hover:bg-purple-50 hover:border-purple-300 transition-colors">
-                  <p className="text-sm font-semibold text-slate-900">{at.nome}</p>
-                  <p className="text-xs text-slate-500">{pav.nome} · {fmtDate(at.data_inicio)} → {fmtDate(at.data_fim)}</p>
-                </button>
-              ))}
+            <div className="overflow-y-auto flex-1 space-y-2 mt-2">
+              {(() => {
+                // Agrupar por cadeia
+                const ativsSemEsta = pavimentosExibidos.flatMap(pav =>
+                  pav.atividades
+                    .filter(a => a.id !== modalVincular.at.id &&
+                      // Não mostrar atividades da própria cadeia da atividade sendo vinculada
+                      !(modalVincular.at.vinculo_id && a.vinculo_id === modalVincular.at.vinculo_id)
+                    )
+                    .map(at => ({ at, pav }))
+                );
+
+                // Separar por: tem cadeia vs sem cadeia
+                const comCadeia: typeof ativsSemEsta = [];
+                const semCadeia: typeof ativsSemEsta = [];
+                const cadeiaVistas = new Set<string>();
+
+                ativsSemEsta.forEach(item => {
+                  if (item.at.vinculo_id) {
+                    comCadeia.push(item);
+                  } else {
+                    semCadeia.push(item);
+                  }
+                });
+
+                // Agrupar atividades com cadeia pelo vinculo_id
+                const grupos: Record<string, typeof ativsSemEsta> = {};
+                comCadeia.forEach(item => {
+                  const vid = item.at.vinculo_id!;
+                  if (!grupos[vid]) grupos[vid] = [];
+                  grupos[vid].push(item);
+                });
+
+                return (
+                  <>
+                    {/* Atividades sem cadeia */}
+                    {semCadeia.length > 0 && (
+                      <div>
+                        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1 px-1">Atividades independentes</p>
+                        {semCadeia.map(({ at, pav }) => (
+                          <button key={at.id} onClick={() => handleReativarVinculo(at)}
+                            className="w-full text-left p-3 border border-slate-200 rounded-lg hover:bg-purple-50 hover:border-purple-300 transition-colors mb-1">
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <p className="text-sm font-semibold text-slate-900">{at.nome}</p>
+                                <p className="text-xs text-slate-500">{pav.nome} · {fmtDate(at.data_inicio)} → {fmtDate(at.data_fim)}</p>
+                              </div>
+                              <span className="text-xs text-slate-400 ml-2">→ vincular</span>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Atividades com cadeia — agrupadas */}
+                    {Object.entries(grupos).length > 0 && (
+                      <div className="mt-2">
+                        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1 px-1">Atividades em cadeia</p>
+                        {Object.entries(grupos).map(([vid, items]) => {
+                          const cadeia = items.sort((a, b) => (a.at.vinculo_ordem ?? 0) - (b.at.vinculo_ordem ?? 0));
+                          return (
+                            <div key={vid} className="border border-purple-200 rounded-lg overflow-hidden mb-2">
+                              <div className="bg-purple-50 px-3 py-1.5 text-xs font-semibold text-purple-700 flex items-center gap-1">
+                                🔗 Cadeia com {cadeia.length} atividades — clique onde deseja inserir após:
+                              </div>
+                              {cadeia.map(({ at, pav }, idx) => (
+                                <button key={at.id} onClick={() => handleReativarVinculo(at)}
+                                  className="w-full text-left p-3 border-b border-purple-100 last:border-0 hover:bg-purple-50 transition-colors">
+                                  <div className="flex items-center gap-2">
+                                    <span className="w-5 h-5 rounded-full bg-purple-200 text-purple-700 text-xs font-bold flex items-center justify-center flex-shrink-0">{idx + 1}</span>
+                                    <div className="flex-1 min-w-0">
+                                      <p className="text-sm font-semibold text-slate-900 truncate">{at.nome}</p>
+                                      <p className="text-xs text-slate-500">{pav.nome} · {fmtDate(at.data_inicio)} → {fmtDate(at.data_fim)}</p>
+                                    </div>
+                                    <span className="text-xs text-purple-500 flex-shrink-0">inserir após →</span>
+                                  </div>
+                                </button>
+                              ))}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
             </div>
 
             <button onClick={() => setModalVincular(null)}
-              className="w-full mt-4 px-4 py-2 border border-slate-300 text-slate-700 rounded-lg font-semibold hover:bg-slate-50">
+              className="w-full mt-4 px-4 py-2 border border-slate-300 text-slate-700 rounded-lg font-semibold hover:bg-slate-50 flex-shrink-0">
               Cancelar
             </button>
           </div>
@@ -2573,6 +2733,144 @@ export default function LinhaDeBalanco() {
                 </div>
               );
             })()}
+          </div>
+        </div>
+      )}
+
+      {/* ─── Modal Excluir Atividade com Vínculo ─── */}
+      {modalExcluirAt && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60]">
+          <div className="bg-white rounded-xl shadow-2xl p-6 max-w-lg w-full mx-4">
+
+            <div className="flex items-center gap-3 mb-4">
+              <span className="text-3xl">🗑️</span>
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">Excluir Atividade Vinculada</h3>
+                <p className="text-sm text-slate-500">Esta atividade faz parte de uma cadeia</p>
+              </div>
+            </div>
+
+            {/* Atividade sendo excluída */}
+            <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-4">
+              <p className="text-xs font-semibold text-red-600 mb-1">Atividade selecionada para exclusão:</p>
+              <p className="font-bold text-slate-900">{modalExcluirAt.at.nome}</p>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {pavimentosExibidos.find(p => p.atividades.find(a => a.id === modalExcluirAt.at.id))?.nome} &nbsp;·&nbsp;
+                {fmtDate(modalExcluirAt.at.data_inicio)} → {fmtDate(modalExcluirAt.at.data_fim)}
+              </p>
+            </div>
+
+            {/* Cadeia vinculada */}
+            {modalExcluirAt.cadeia.length > 0 && (
+              <div className="mb-5">
+                <p className="text-sm font-semibold text-slate-700 mb-2">
+                  🔗 Atividades vinculadas ({modalExcluirAt.cadeia.length}):
+                </p>
+                <div className="space-y-2 max-h-48 overflow-y-auto">
+                  {modalExcluirAt.cadeia.map(({ at, pav, mesmoLote }) => (
+                    <div key={at.id} className={`flex items-center justify-between p-2.5 rounded-lg border text-sm ${
+                      mesmoLote ? 'bg-orange-50 border-orange-200' : 'bg-blue-50 border-blue-200'
+                    }`}>
+                      <div>
+                        <p className="font-semibold text-slate-900">{at.nome}</p>
+                        <p className="text-xs text-slate-500">{pav.nome} · {fmtDate(at.data_inicio)} → {fmtDate(at.data_fim)}</p>
+                      </div>
+                      <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
+                        mesmoLote ? 'bg-orange-200 text-orange-800' : 'bg-blue-200 text-blue-800'
+                      }`}>
+                        {mesmoLote ? 'Mesmo lote' : 'Vinc. manual'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                {modalExcluirAt.cadeia.some(c => !c.mesmoLote) && (
+                  <p className="text-xs text-blue-700 mt-2 bg-blue-50 rounded p-2">
+                    ℹ️ Atividades marcadas como <strong>"Vinc. manual"</strong> foram vinculadas posteriormente e podem pertencer a outro lote.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* Ações */}
+            <div className="space-y-2">
+              {/* Opção 1a: Excluir só esta — manter vínculo das demais */}
+              <button
+                onClick={() => {
+                  excluirAtividadesIds([modalExcluirAt.at.id], []); // sem desvinculação
+                }}
+                disabled={excluindoAtModal}
+                className="w-full px-4 py-3 bg-yellow-500 hover:bg-yellow-600 disabled:bg-slate-200 text-white rounded-lg font-semibold text-sm text-left flex items-center gap-3 transition-colors"
+              >
+                <span className="text-xl">🗑️</span>
+                <div>
+                  <div>Excluir apenas esta atividade</div>
+                  <div className="text-xs font-normal opacity-80">As demais permanecem vinculadas entre si</div>
+                </div>
+              </button>
+
+              {/* Opção 1b: Excluir só esta — quebrar vínculo das demais */}
+              <button
+                onClick={() => {
+                  const desvincula = modalExcluirAt.cadeia.map(c => c.at.id);
+                  excluirAtividadesIds([modalExcluirAt.at.id], desvincula);
+                }}
+                disabled={excluindoAtModal}
+                className="w-full px-4 py-3 bg-slate-600 hover:bg-slate-700 disabled:bg-slate-200 text-white rounded-lg font-semibold text-sm text-left flex items-center gap-3 transition-colors"
+              >
+                <span className="text-xl">✂️</span>
+                <div>
+                  <div>Excluir esta e quebrar vínculos das demais</div>
+                  <div className="text-xs font-normal opacity-80">As demais ficam independentes (sem vínculo)</div>
+                </div>
+              </button>
+
+              {/* Opção 2: Excluir todas do mesmo lote */}
+              {modalExcluirAt.cadeia.some(c => c.mesmoLote) && (
+                <button
+                  onClick={() => {
+                    const mesmoLoteIds = modalExcluirAt.cadeia.filter(c => c.mesmoLote).map(c => c.at.id);
+                    const desvincula = modalExcluirAt.cadeia.filter(c => !c.mesmoLote).map(c => c.at.id);
+                    excluirAtividadesIds([modalExcluirAt.at.id, ...mesmoLoteIds], desvincula);
+                  }}
+                  disabled={excluindoAtModal}
+                  className="w-full px-4 py-3 bg-orange-600 hover:bg-orange-700 disabled:bg-slate-200 text-white rounded-lg font-semibold text-sm text-left flex items-center gap-3 transition-colors"
+                >
+                  <span className="text-xl">🗑️🗑️</span>
+                  <div>
+                    <div>Excluir esta + atividades do mesmo lote</div>
+                    <div className="text-xs font-normal opacity-80">
+                      {modalExcluirAt.cadeia.filter(c => c.mesmoLote).length + 1} atividades · vínculos manuais são preservados
+                    </div>
+                  </div>
+                </button>
+              )}
+
+              {/* Opção 3: Excluir toda a cadeia */}
+              <button
+                onClick={() => {
+                  const todos = [modalExcluirAt.at.id, ...modalExcluirAt.cadeia.map(c => c.at.id)];
+                  excluirAtividadesIds(todos);
+                }}
+                disabled={excluindoAtModal}
+                className="w-full px-4 py-3 bg-red-600 hover:bg-red-700 disabled:bg-slate-200 text-white rounded-lg font-semibold text-sm text-left flex items-center gap-3 transition-colors"
+              >
+                <span className="text-xl">💥</span>
+                <div>
+                  <div>Excluir toda a cadeia vinculada</div>
+                  <div className="text-xs font-normal opacity-80">
+                    {modalExcluirAt.cadeia.length + 1} atividades serão excluídas
+                  </div>
+                </div>
+              </button>
+
+              <button
+                onClick={() => setModalExcluirAt(null)}
+                disabled={excluindoAtModal}
+                className="w-full px-4 py-2 border border-slate-300 text-slate-700 rounded-lg font-semibold hover:bg-slate-50 text-sm"
+              >
+                Cancelar
+              </button>
+            </div>
           </div>
         </div>
       )}
