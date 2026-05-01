@@ -2,7 +2,9 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import { createClient } from '@supabase/supabase-js';
+import { createClient } from '@/lib/supabase/client';
+import { useAuth } from '@/app/providers';
+import Header from '@/components/Header';
 
 interface Obra {
   id: number;
@@ -16,6 +18,7 @@ interface Obra {
 
 export default function Home() {
   const router = useRouter();
+  const { empresa, loading: authLoading } = useAuth();
   const [obras, setObras] = useState<Obra[]>([]);
   const [loading, setLoading] = useState(true);
   const [formData, setFormData] = useState({
@@ -23,17 +26,21 @@ export default function Home() {
   });
   const [submitting, setSubmitting] = useState(false);
 
-  const supabase = useMemo(() => createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  ), []);
+  const supabase = useMemo(() => createClient(), []);
 
-  useEffect(() => { fetchObras(); }, [supabase]);
+  useEffect(() => {
+    if (!authLoading && empresa) fetchObras();
+  }, [authLoading, empresa]);
 
   const fetchObras = async () => {
+    if (!empresa) return;
     try {
       setLoading(true);
-      const { data } = await supabase.from('obras').select('*').order('created_at', { ascending: false });
+      const { data } = await supabase
+        .from('obras')
+        .select('*')
+        .eq('empresa_id', empresa.id)
+        .order('created_at', { ascending: false });
       setObras(data || []);
     } finally { setLoading(false); }
   };
@@ -44,12 +51,14 @@ export default function Home() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!empresa) return;
     setSubmitting(true);
     const { data, error } = await supabase.from('obras').insert([{
       nome: formData.nome,
       descricao: formData.descricao || null,
       data_inicio: formData.data_inicio || null,
       data_fim: formData.data_fim || null,
+      empresa_id: empresa.id,
     }]).select().single();
     if (!error && data) {
       setFormData({ nome: '', descricao: '', data_inicio: '', data_fim: '' });
@@ -58,22 +67,17 @@ export default function Home() {
     setSubmitting(false);
   };
 
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
-      {/* Header */}
-      <header className="bg-white border-b border-slate-200 shadow-sm">
-        <div className="max-w-7xl mx-auto px-6 py-5">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center">
-              <span className="text-white text-xl">🏗️</span>
-            </div>
-            <div>
-              <h1 className="text-2xl font-bold text-slate-900">Minha Obra</h1>
-              <p className="text-sm text-slate-500">Gestão de obras com Linha de Balanço</p>
-            </div>
-          </div>
-        </div>
-      </header>
+      <Header />
 
       <main className="max-w-7xl mx-auto px-6 py-8">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -136,17 +140,13 @@ export default function Home() {
                       onClick={() => router.push(`/obras/${obra.id}`)}
                       className="flex items-center gap-4 p-4 border border-slate-200 rounded-xl hover:border-blue-300 hover:bg-blue-50 transition-colors cursor-pointer group"
                     >
-                      {/* Foto da obra */}
                       <div className="w-16 h-16 rounded-lg overflow-hidden flex-shrink-0 bg-slate-100 flex items-center justify-center border border-slate-200">
                         {obra.foto_url ? (
-                          <img src={obra.foto_url} alt={obra.nome}
-                            className="w-full h-full object-cover" />
+                          <img src={obra.foto_url} alt={obra.nome} className="w-full h-full object-cover" />
                         ) : (
                           <span className="text-2xl">🏗️</span>
                         )}
                       </div>
-
-                      {/* Infos */}
                       <div className="flex-1 min-w-0">
                         <h3 className="font-bold text-slate-900 text-lg leading-tight truncate">{obra.nome}</h3>
                         {obra.descricao && (
@@ -157,7 +157,6 @@ export default function Home() {
                           {obra.data_fim && <span>→ {new Date(obra.data_fim).toLocaleDateString('pt-BR')}</span>}
                         </div>
                       </div>
-
                       <span className="text-blue-400 group-hover:text-blue-600 text-xl flex-shrink-0">›</span>
                     </div>
                   ))}

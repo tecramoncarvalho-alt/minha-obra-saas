@@ -1,36 +1,58 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Minha Obra
 
-## Getting Started
+SaaS multi-tenant de gestão de obras com Linha de Balanço.
 
-First, run the development server:
+## Stack
+
+- **Next.js 16.2.4** (App Router) com React 19
+- **TypeScript 5**
+- **Tailwind CSS v4**
+- **Supabase** (Postgres + Auth + Storage)
+- **Vercel** (deploy — branch `main`)
+
+## Desenvolvimento
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm run dev    # http://localhost:3000 (Turbopack)
+npm run build  # build de produção
+npm run lint   # ESLint
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Variáveis de ambiente em `.env.local` (não commitado — contém `NEXT_PUBLIC_SUPABASE_URL` e `NEXT_PUBLIC_SUPABASE_ANON_KEY`).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Estrutura principal
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```
+app/
+├── lib/types.ts                    # Interfaces centralizadas (Obra, Atividade, Versao, …)
+├── calendario.ts                   # Fonte de verdade para cálculos de dias úteis
+├── obras/[id]/
+│   ├── linha-balanco/              # Módulo principal do gráfico
+│   │   ├── page.tsx                # Orquestrador (~1370 linhas)
+│   │   ├── utils/                  # geradorCores.ts, helpers.ts
+│   │   ├── hooks/                  # useCalendarioAtividades, useAtividades,
+│   │   │                           # useVinculos, useDragAndDrop, useConflitos
+│   │   └── components/             # GraficoLinhaBalanco, BarraAtividade,
+│   │       ├── modais/             #   CalendarioHeader, SVGVinculos, LegendaCores,
+│   │       └── …                   #   ToolbarSuperior, HeaderLinhaBalanco,
+│   │                               #   BannersLinhaBalanco, ContextMenu,
+│   │                               #   TooltipAtividade, TelaCheia
+│   │                               # + 9 modais em components/modais/
+│   ├── dashboard/page.tsx
+│   ├── criacao-em-lote/page.tsx
+│   └── editar-bloco/[bloco]/page.tsx
+lib/supabase/client.ts              # Singleton browser client
+```
 
-## Learn More
+## Autenticação
 
-To learn more about Next.js, take a look at the following resources:
+- `proxy.ts` (não `middleware.ts`) — intercepta todas as rotas
+- Rotas públicas: `/login`, `/signup`, `/auth/callback`
+- `AuthProvider` em `app/providers.tsx` — contexto global `useAuth()`
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Regras de negócio importantes
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- `duracao_dias` de atividades é sempre em **dias úteis** (nunca corridos)
+- Vínculos de dependência propagam a cadeia inteira no drag-and-drop
+- Versão "Definitiva" é read-only; edições requerem criação de rascunho
+- Calendário configurável por obra: `sabado_util`, `domingo_util`, tabela `feriados`
