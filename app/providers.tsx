@@ -38,11 +38,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const supabase = useMemo(() => createClient(), [])
 
   const loadEmpresa = async (userId: string) => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('usuarios_empresas')
       .select('role, empresas(id, nome)')
       .eq('user_id', userId)
       .single()
+
+    if (error) console.error('[loadEmpresa] erro:', error.code, error.message)
 
     if (data?.empresas) {
       const emp = data.empresas as Empresa
@@ -55,11 +57,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   useEffect(() => {
+    // Bootstrap initial session from storage — never blocks on network
+    supabase.auth.getSession().then(async ({ data: { session } }: { data: { session: Session | null } }) => {
+      setUser(session?.user ?? null)
+      if (session?.user) {
+        try { await loadEmpresa(session.user.id) } catch { setEmpresa(null); setRole(null) }
+      }
+      setLoading(false)
+    })
+
+    // Handle future changes (login, logout, token refresh) — skip INITIAL_SESSION
+    // because getSession() above already handles the initial state
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (_event: AuthChangeEvent, session: Session | null) => {
+      async (event: AuthChangeEvent, session: Session | null) => {
+        if (event === 'INITIAL_SESSION') return
         setUser(session?.user ?? null)
         if (session?.user) {
-          await loadEmpresa(session.user.id)
+          try {
+            await loadEmpresa(session.user.id)
+          } catch {
+            setEmpresa(null)
+            setRole(null)
+          }
         } else {
           setEmpresa(null)
           setRole(null)

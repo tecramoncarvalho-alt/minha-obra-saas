@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
-import type { Obra, Feriado, Pavimento, Subatividade, Atividade, PavComAtiv, Versao } from '@/app/lib/types';
+import type { Obra, Feriado, Pavimento, Subatividade, Atividade, PavComAtiv, Versao, ApontamentoDiario, StatusAtividade } from '@/app/lib/types';
 import { getCor, getCorSub, calcDuracaoTotal, coresCache } from './utils/geradorCores';
 import { gerarUUID } from './utils/helpers';
 import { parseDate, toStr, addDias, diffDias, LABEL_DIA } from '@/app/calendario';
@@ -120,6 +120,10 @@ export default function LinhaDeBalanco() {
   const [telaCheia, setTelaCheia] = useState(false);
   const [pavimentosFiltro, setPavimentosFiltro] = useState<Set<number>>(new Set()); // vazio = todos
   const [modalFiltros, setModalFiltros] = useState(false);
+  // ─── Avanço real na linha de balanço ───
+  const [mostrarAvancoReal, setMostrarAvancoReal] = useState(false);
+  const [progrealPorAtividade, setProgrealPorAtividade] = useState<Record<number, { percentual: number; status: StatusAtividade }>>({});
+
   // ─── Versões ───
   const [versoes, setVersoes] = useState<Versao[]>([]);
   const [versaoAtual, setVersaoAtual] = useState<Versao | null>(null);
@@ -254,6 +258,31 @@ export default function LinhaDeBalanco() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { fetchDados(); fetchVersoes(); }, [obraId]);
 
+  // Buscar apontamentos mais recentes por atividade quando o toggle é ativado
+  useEffect(() => {
+    if (!mostrarAvancoReal) { setProgrealPorAtividade({}); return; }
+    const ids = pavimentos.flatMap(p => p.atividades.map(a => a.id));
+    if (ids.length === 0) return;
+    supabase
+      .from('apontamentos_diarios')
+      .select('atividade_id,percentual_executado,status,data')
+      .in('atividade_id', ids)
+      .order('data', { ascending: false })
+      .then(({ data }: { data: Pick<ApontamentoDiario, 'atividade_id' | 'percentual_executado' | 'status' | 'data'>[] | null }) => {
+        if (!data) return;
+        const mapa: Record<number, { percentual: number; status: StatusAtividade }> = {};
+        for (const ap of data) {
+          if (!mapa[ap.atividade_id]) {
+            mapa[ap.atividade_id] = {
+              percentual: ap.percentual_executado,
+              status: ap.status ?? 'EM_ANDAMENTO',
+            };
+          }
+        }
+        setProgrealPorAtividade(mapa);
+      });
+  }, [mostrarAvancoReal, pavimentos]);
+
   // Fechar menu de contexto ao clicar em qualquer lugar
   useEffect(() => {
     const close = () => setCtxMenu(null);
@@ -296,34 +325,54 @@ export default function LinhaDeBalanco() {
         numLinhasPorBloco[blocoNome] = p ? parseMeta(p.observacao).linhas : 1;
       });
 
-      const pavCompletos: PavComAtiv[] = await Promise.all(
-        ordenados.map(async (pav) => {
-          const blocoNome = pav.nome.includes(' - ') ? pav.nome.split(' - ')[0].trim() : 'Sem Bloco';
-          const { data: ativData } = await supabase
-            .from('atividades').select('*').eq('pavimento_id', pav.id).order('data_inicio');
+      const pavIds = ordenados.map(p => p.id);
 
-          // Buscar subatividades para cada atividade
-          const atividades: Atividade[] = await Promise.all(
-            (ativData || []).map(async (a: Omit<Atividade, 'subatividades'>) => {
-              const { data: subData } = await supabase
-                .from('subatividades').select('*')
-                .eq('atividade_id', a.id).order('ordem');
-              return {
-                ...a,
-                linha_index: a.linha_index ?? 0,
-                vinculo_id: a.vinculo_id ?? null,
-                vinculo_ordem: a.vinculo_ordem ?? null,
-                subatividades: (subData || []).map((s: Subatividade, i: number) => ({
-                  ...s,
-                  cor: getCorSub(a.nome, i),
-                })),
-              };
-            })
-          );
+      const { data: todasAtivs } = await supabase
+        .from('atividades')
+        .select('id,nome,data_inicio,data_fim,duracao_dias,equipe,efetivo,linha_index,vinculo_id,vinculo_ordem,pavimento_id')
+        .in('pavimento_id', pavIds)
+        .order('data_inicio');
 
-          return { ...pav, blocoNome, atividades, numLinhas: numLinhasPorBloco[blocoNome] ?? 1 };
-        })
-      );
+      const atividadeIds = (todasAtivs ?? []).map((a: { id: number }) => a.id);
+
+      const { data: todasSubs } = atividadeIds.length > 0
+        ? await supabase
+            .from('subatividades')
+            .select('id,atividade_id,nome,duracao,equipe,efetivo,ordem')
+            .in('atividade_id', atividadeIds)
+            .order('ordem')
+        : { data: [] as Subatividade[] };
+
+      const subsPorAtividade: Record<number, Subatividade[]> = {};
+      for (const s of (todasSubs ?? []) as Subatividade[]) {
+        if (!subsPorAtividade[s.atividade_id]) subsPorAtividade[s.atividade_id] = [];
+        subsPorAtividade[s.atividade_id].push(s);
+      }
+      type AtivSemSubs = Omit<Atividade, 'subatividades'>;
+      const ativsPorPavimento: Record<number, AtivSemSubs[]> = {};
+      for (const a of (todasAtivs ?? []) as AtivSemSubs[]) {
+        if (a.pavimento_id != null) {
+          if (!ativsPorPavimento[a.pavimento_id]) ativsPorPavimento[a.pavimento_id] = [];
+          ativsPorPavimento[a.pavimento_id].push(a);
+        }
+      }
+
+      const pavCompletos: PavComAtiv[] = ordenados.map((pav) => {
+        const blocoNome = pav.nome.includes(' - ') ? pav.nome.split(' - ')[0].trim() : 'Sem Bloco';
+        const atividades: Atividade[] = (ativsPorPavimento[pav.id] ?? []).map(
+          (a: Omit<Atividade, 'subatividades'>) => ({
+            ...a,
+            linha_index: a.linha_index ?? 0,
+            vinculo_id: a.vinculo_id ?? null,
+            vinculo_ordem: a.vinculo_ordem ?? null,
+            subatividades: (subsPorAtividade[a.id] ?? []).map((s: Subatividade, i: number) => ({
+              ...s,
+              cor: getCorSub(a.nome, i),
+            })),
+          })
+        );
+        return { ...pav, blocoNome, atividades, numLinhas: numLinhasPorBloco[blocoNome] ?? 1 };
+      });
       setPavimentos(pavCompletos);
     } finally { setLoading(false); }
   };
@@ -1081,6 +1130,8 @@ export default function LinhaDeBalanco() {
           totalPavimentos={pavimentosExibidos.length}
           onAbrirFiltros={() => setModalFiltros(true)}
           onImprimir={handleImprimir}
+          mostrarAvancoReal={mostrarAvancoReal}
+          onToggleAvancoReal={() => setMostrarAvancoReal(v => !v)}
         />
 
         {/* Gráfico */}
@@ -1148,6 +1199,8 @@ export default function LinhaDeBalanco() {
                     }
                     abrirEditarBloco(blocoNome, linhasAtuais);
                   }}
+                  mostrarAvancoReal={mostrarAvancoReal}
+                  progrealPorAtividade={progrealPorAtividade}
                 />
               );
             })()}

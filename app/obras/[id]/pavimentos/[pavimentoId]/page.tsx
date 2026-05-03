@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { createClient } from '@supabase/supabase-js';
+import { createClient } from '@/lib/supabase/client';
 
 interface Pavimento {
   id: number;
@@ -44,21 +44,12 @@ export default function PavimentoDetalhes() {
   const [excluindo, setExcluindo] = useState(false);
 
   // Criar cliente Supabase uma única vez
-  const supabase = useMemo(() => {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-    if (!url || !key) {
-      throw new Error('Credenciais do Supabase não configuradas');
-    }
-
-    return createClient(url, key);
-  }, []);
+  const supabase = createClient();
 
   // Carregar dados ao iniciar
   useEffect(() => {
     fetchPavimentoEAtividades();
-  }, [pavimentoId, supabase]);
+  }, [pavimentoId]);
 
   const fetchPavimentoEAtividades = async () => {
     try {

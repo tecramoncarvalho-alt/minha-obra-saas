@@ -7,11 +7,14 @@ interface Props {
   totalPavimentos: number;
   onAbrirFiltros: () => void;
   onImprimir: () => void;
+  mostrarAvancoReal?: boolean;
+  onToggleAvancoReal?: () => void;
 }
 
 export function ToolbarSuperior({
   zoomInicio, zoomFim, setZoomInicio, setZoomFim,
   pavimentosFiltro, totalPavimentos, onAbrirFiltros, onImprimir,
+  mostrarAvancoReal = false, onToggleAvancoReal,
 }: Props) {
   return (
     <div className="bg-white rounded-lg border border-slate-200 p-3 mb-4 flex flex-wrap items-center gap-3">
@@ -27,6 +30,19 @@ export function ToolbarSuperior({
             className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded text-xs font-semibold">✕</button>
         )}
       </div>
+
+      {onToggleAvancoReal && (
+        <button
+          onClick={onToggleAvancoReal}
+          className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
+            mostrarAvancoReal
+              ? 'bg-green-600 text-white border-green-600'
+              : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+          }`}
+        >
+          📈 Avanço Real
+        </button>
+      )}
 
       <button onClick={onAbrirFiltros}
         className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${

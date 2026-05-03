@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
+import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/app/providers';
@@ -140,9 +141,9 @@ export default function Home() {
                       onClick={() => router.push(`/obras/${obra.id}`)}
                       className="flex items-center gap-4 p-4 border border-slate-200 rounded-xl hover:border-blue-300 hover:bg-blue-50 transition-colors cursor-pointer group"
                     >
-                      <div className="w-16 h-16 rounded-lg overflow-hidden flex-shrink-0 bg-slate-100 flex items-center justify-center border border-slate-200">
+                      <div className="w-16 h-16 rounded-lg overflow-hidden flex-shrink-0 bg-slate-100 flex items-center justify-center border border-slate-200 relative">
                         {obra.foto_url ? (
-                          <img src={obra.foto_url} alt={obra.nome} className="w-full h-full object-cover" />
+                          <Image src={obra.foto_url} alt={obra.nome} fill className="object-cover" />
                         ) : (
                           <span className="text-2xl">🏗️</span>
                         )}

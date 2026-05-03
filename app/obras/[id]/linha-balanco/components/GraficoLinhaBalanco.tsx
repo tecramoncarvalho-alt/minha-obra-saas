@@ -2,7 +2,7 @@
 
 import { useRef } from 'react';
 import { parseDate, toStr, diffDias } from '@/app/calendario';
-import type { Atividade, PavComAtiv } from '@/app/lib/types';
+import type { Atividade, PavComAtiv, StatusAtividade } from '@/app/lib/types';
 import { getCor, getCorSub, calcDuracaoTotal } from '../utils/geradorCores';
 
 const LABEL_DIA = ['D','S','T','Q','Q','S','S'];
@@ -58,6 +58,8 @@ interface Props {
   onMouseLeaveAt?: () => void;
   onEditarBloco?: (blocoNome: string, linhasAtuais: number) => void;
   stickyHeader?: boolean;
+  mostrarAvancoReal?: boolean;
+  progrealPorAtividade?: Record<number, { percentual: number; status: StatusAtividade }>;
 }
 
 export function GraficoLinhaBalanco({
@@ -68,6 +70,7 @@ export function GraficoLinhaBalanco({
   modoLeitura, atualizando,
   onContextMenu, onContextMenuAt, onMouseDown, onMouseEnterAt, onMouseLeaveAt,
   onEditarBloco, stickyHeader = false,
+  mostrarAvancoReal = false, progrealPorAtividade,
 }: Props) {
   const internalRef = useRef<HTMLDivElement>(null);
   const graficoRef = graficoRefProp ?? internalRef;
@@ -271,6 +274,32 @@ export function GraficoLinhaBalanco({
                     onMouseEnter={modoInterativo && onMouseEnterAt ? e => onMouseEnterAt(e, at, pav) : undefined}
                     onMouseLeave={modoInterativo && onMouseLeaveAt ? () => onMouseLeaveAt() : undefined}
                   >
+                    {/* Progresso real — sobreposição quando toggle ativo */}
+                    {mostrarAvancoReal && (() => {
+                      const prog = progrealPorAtividade?.[at.id];
+                      if (!prog) return null;
+                      const splitPct = Math.min(100, Math.max(0, prog.percentual));
+                      const isParalisada = prog.status === 'PARALISADA';
+                      return (
+                        <>
+                          <div
+                            className="absolute top-0 bottom-0 left-0 pointer-events-none"
+                            style={{ width: `${splitPct}%`, backgroundColor: 'rgba(255,255,255,0.35)' }}
+                          />
+                          {isParalisada && splitPct < 100 && (
+                            <div
+                              className="absolute top-0 bottom-0 pointer-events-none"
+                              style={{
+                                left: `${splitPct}%`,
+                                width: `${100 - splitPct}%`,
+                                backgroundImage: 'repeating-linear-gradient(45deg, rgba(0,0,0,0.15) 0px, rgba(0,0,0,0.15) 3px, transparent 3px, transparent 8px)',
+                              }}
+                            />
+                          )}
+                        </>
+                      );
+                    })()}
+
                     {/* Segmentos de subatividades */}
                     {temSubs && !isDragging && (
                       <div className="absolute inset-x-0 bottom-0 flex" style={{ height: '40%' }}>

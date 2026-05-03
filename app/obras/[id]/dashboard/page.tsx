@@ -2,10 +2,23 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { createClient } from '@supabase/supabase-js';
+import { createClient } from '@/lib/supabase/client';
+import type { ApontamentoDiario, StatusAtividade } from '@/app/lib/types';
+import { gerarResumoAvancoObra, gerarDesviosPorAtividade, calcularCurvaS } from '@/app/lib/calculador-avanco';
+import { KpiCards } from './components/KpiCards';
+import { AlertasParalisadas } from './components/AlertasParalisadas';
+import { GridEfetivo } from './components/GridEfetivo';
+import { CurvaS } from './components/CurvaS';
+import { TabelaAtencao } from './components/TabelaAtencao';
+import type { ConfigCalendario } from '@/app/calendario';
 
 // ─── Interfaces ───
-interface Obra { id: number; nome: string; data_inicio: string | null; data_fim: string | null; }
+interface Obra {
+  id: number; nome: string;
+  data_inicio: string | null; data_fim: string | null;
+  sabado_util: boolean; domingo_util: boolean;
+}
+interface Feriado { id: number; data: string; nome: string; }
 interface Pavimento { id: number; obra_id: number; nome: string; numero: number | null; }
 interface Subatividade {
   id: number; atividade_id: number; nome: string;
@@ -16,6 +29,7 @@ interface Atividade {
   data_inicio: string; data_fim: string;
   duracao_dias: number | null; equipe: string | null;
   efetivo: number | null;
+  linha_index: number; vinculo_id: string | null; vinculo_ordem: number | null;
   subatividades: Subatividade[];
   pavimento?: Pavimento;
 }
@@ -72,16 +86,50 @@ export default function Dashboard() {
   const [modalRelatorio, setModalRelatorio] = useState(false);
   const [tipoRelatorio, setTipoRelatorio] = useState<'dia' | 'semana' | 'mes'>('dia');
 
-  const supabase = useMemo(() => createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  ), []);
+  // Apontamentos reais
+  const [apontamentosHoje, setApontamentosHoje] = useState<ApontamentoDiario[]>([]);
+  const [todosApontamentos, setTodosApontamentos] = useState<ApontamentoDiario[]>([]);
+  const [feriados, setFeriados] = useState<Feriado[]>([]);
 
-  useEffect(() => { fetchDados(); fetchVersoes(); }, [obraId, supabase]);
+  const supabase = createClient();
+
+  useEffect(() => { fetchDados(); fetchVersoes(); fetchApontamentos(); }, [obraId]);
+
+  // Buscar todos os apontamentos da obra quando as atividades efetivas mudam
+  useEffect(() => {
+    let ids: number[];
+    if (modoVersao && versaoSelecionada) {
+      ids = (versaoSelecionada.snapshot.pavimentos || []).flatMap((pav: { atividades?: { id: number }[] }) =>
+        (pav.atividades || []).map(at => at.id)
+      );
+    } else {
+      ids = atividades.map(a => a.id);
+    }
+    if (ids.length === 0) { setTodosApontamentos([]); return; }
+    supabase
+      .from('apontamentos_diarios')
+      .select('*')
+      .in('atividade_id', ids)
+      .order('data', { ascending: true })
+      .then(({ data }: { data: ApontamentoDiario[] | null }) => setTodosApontamentos(data || []));
+  }, [atividades, modoVersao, versaoSelecionada]);
+
+  const fetchApontamentos = async () => {
+    const dataHoje = hoje();
+    try {
+      const res = await fetch(`/api/obras/${obraId}/apontamentos?data=${dataHoje}`);
+      if (res.ok) {
+        const { apontamentos } = await res.json();
+        setApontamentosHoje(apontamentos);
+      }
+    } catch {
+      // Apontamentos não críticos — não bloqueia o dashboard
+    }
+  };
 
   const fetchVersoes = async () => {
     const { data } = await supabase
-      .from('versoes').select('*').eq('obra_id', obraId)
+      .from('versoes').select('id,nome,status,descricao,created_at,snapshot').eq('obra_id', obraId)
       .order('created_at', { ascending: false });
     if (data && data.length > 0) {
       setVersoes(data as Versao[]);
@@ -113,20 +161,24 @@ export default function Dashboard() {
     try {
       setLoading(true);
 
-      const { data: obraData } = await supabase.from('obras').select('*').eq('id', obraId).single();
+      const { data: obraData } = await supabase.from('obras').select('id,nome,data_inicio,data_fim,foto_url,sabado_util,domingo_util').eq('id', obraId).single();
       if (obraData) setObra(obraData);
 
+      const { data: ferData } = await supabase
+        .from('feriados').select('id,data,nome').eq('obra_id', obraId);
+      setFeriados(ferData || []);
+
       const { data: pavData } = await supabase
-        .from('pavimentos').select('*').eq('obra_id', obraId);
+        .from('pavimentos').select('id,nome,numero,observacao,obra_id').eq('obra_id', obraId);
       setPavimentos(pavData || []);
 
-      const pavIds = (pavData || []).map(p => p.id);
+      const pavIds = (pavData || []).map((p: Pavimento) => p.id);
       if (pavIds.length === 0) { setLoading(false); return; }
 
       // Buscar atividades — sem filtro de data (filtramos no front)
       const { data: atData, error: atError } = await supabase
         .from('atividades')
-        .select('*')
+        .select('id,nome,data_inicio,data_fim,duracao_dias,equipe,efetivo,linha_index,vinculo_id,vinculo_ordem,pavimento_id')
         .in('pavimento_id', pavIds);
 
       if (atError) {
@@ -137,14 +189,14 @@ export default function Dashboard() {
 
       console.log('Atividades encontradas:', atData?.length, atData);
 
-      const atIds = (atData || []).map(a => a.id);
+      const atIds = (atData || []).map((a: Atividade) => a.id);
 
       // Buscar subatividades — tratar se tabela não existir
       let subData: Subatividade[] = [];
       if (atIds.length > 0) {
         const { data: subResult, error: subError } = await supabase
           .from('subatividades')
-          .select('*')
+          .select('id,atividade_id,nome,duracao,equipe,efetivo,ordem')
           .in('atividade_id', atIds)
           .order('ordem');
 
@@ -158,14 +210,14 @@ export default function Dashboard() {
       console.log('Subatividades encontradas:', subData.length, subData);
 
       // Montar mapa
-      const pavMap = Object.fromEntries((pavData || []).map(p => [p.id, p]));
+      const pavMap = Object.fromEntries((pavData || []).map((p: Pavimento) => [p.id, p]));
       const subMap: Record<number, Subatividade[]> = {};
       subData.forEach(s => {
         if (!subMap[s.atividade_id]) subMap[s.atividade_id] = [];
         subMap[s.atividade_id].push(s);
       });
 
-      const ativsCompletas: Atividade[] = (atData || []).map(a => ({
+      const ativsCompletas: Atividade[] = (atData || []).map((a: Atividade) => ({
         ...a,
         equipe: a.equipe ?? null,
         efetivo: a.efetivo ?? null,
@@ -507,6 +559,108 @@ export default function Dashboard() {
 
   const isHoje = dataSelecionada === hoje();
 
+  // ─── Indicadores de avanço real ───
+  const avancoRealHoje = useMemo(() => {
+    if (!apontamentosHoje.length) return null;
+    const soma = apontamentosHoje.reduce((acc, a) => acc + a.percentual_executado, 0);
+    return Math.round(soma / apontamentosHoje.length);
+  }, [apontamentosHoje]);
+
+  const efetivoRealHoje = useMemo(
+    () => apontamentosHoje.reduce((acc, a) => acc + a.efetivo_real, 0),
+    [apontamentosHoje]
+  );
+
+  const atividadesSemApontamento = useMemo(() => {
+    const idsComApontamento = new Set(apontamentosHoje.map(a => a.atividade_id));
+    return atividadesDoDia.filter(at => !idsComApontamento.has(at.id));
+  }, [apontamentosHoje, atividadesDoDia]);
+
+  // ─── Config, resumo e desvios de avanço ───
+  const config = useMemo((): ConfigCalendario => ({
+    sabadoUtil: obra?.sabado_util ?? false,
+    domingoUtil: obra?.domingo_util ?? false,
+    feriados: feriados.map(f => f.data),
+  }), [obra, feriados]);
+
+  const resumo = useMemo(() => {
+    if (!obra || atividadesEfetivas.length === 0) return null;
+    return gerarResumoAvancoObra(
+      obra as import('@/app/lib/types').Obra,
+      atividadesEfetivas as import('@/app/lib/types').Atividade[],
+      todosApontamentos,
+      config,
+      dataSelecionada
+    );
+  }, [obra, atividadesEfetivas, todosApontamentos, config, dataSelecionada]);
+
+  const desvios = useMemo(() =>
+    gerarDesviosPorAtividade(
+      atividadesDoDia as import('@/app/lib/types').Atividade[],
+      todosApontamentos,
+      config,
+      dataSelecionada
+    ),
+    [atividadesDoDia, todosApontamentos, config, dataSelecionada]
+  );
+
+  const paralisadas = useMemo(() => {
+    const porAtividade = new Map<number, ApontamentoDiario>();
+    for (const ap of todosApontamentos) {
+      const atual = porAtividade.get(ap.atividade_id);
+      if (!atual || ap.data > atual.data) porAtividade.set(ap.atividade_id, ap);
+    }
+    return atividadesEfetivas
+      .filter(at => porAtividade.get(at.id)?.status === 'PARALISADA')
+      .map(at => ({
+        id: at.id,
+        nome: at.nome,
+        pavimentoNome: at.pavimento?.nome ?? 'Desconhecido',
+        ultimoApontamento: porAtividade.get(at.id)!,
+      }));
+  }, [atividadesEfetivas, todosApontamentos]);
+
+  const historicoPorAtividade = useMemo(() => {
+    const mapa: Record<number, ApontamentoDiario[]> = {};
+    for (const ap of todosApontamentos) {
+      if (!mapa[ap.atividade_id]) mapa[ap.atividade_id] = [];
+      mapa[ap.atividade_id].push(ap);
+    }
+    return mapa;
+  }, [todosApontamentos]);
+
+  const itensAtencao = useMemo(() => {
+    const porAtividade = new Map<number, ApontamentoDiario>();
+    for (const ap of todosApontamentos) {
+      const atual = porAtividade.get(ap.atividade_id);
+      if (!atual || ap.data > atual.data) porAtividade.set(ap.atividade_id, ap);
+    }
+    return desvios
+      .map(d => {
+        const at = atividadesDoDia.find(a => a.id === d.atividade_id);
+        if (!at) return null;
+        return {
+          atividade: { ...at, pavimentoNome: at.pavimento?.nome ?? '' },
+          desvio: d,
+          ultimoApontamento: porAtividade.get(d.atividade_id),
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => x !== null);
+  }, [desvios, atividadesDoDia, todosApontamentos]);
+
+  const dadosCurvaS = useMemo(() => {
+    if (!obra?.data_inicio || !obra?.data_fim || atividadesEfetivas.length === 0) return [];
+    const [y1, m1, d1] = obra.data_inicio.split('-').map(Number);
+    const [y2, m2, d2] = obra.data_fim.split('-').map(Number);
+    return calcularCurvaS(
+      atividadesEfetivas as import('@/app/lib/types').Atividade[],
+      todosApontamentos,
+      new Date(y1, m1 - 1, d1),
+      new Date(y2, m2 - 1, d2),
+      config
+    );
+  }, [obra, atividadesEfetivas, todosApontamentos, config]);
+
   if (loading) return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50">
       <div className="text-center">
@@ -586,6 +740,9 @@ export default function Dashboard() {
 
       <main className="max-w-7xl mx-auto px-6 py-8 space-y-8">
 
+        {/* ─── Alertas de atividades paralisadas ─── */}
+        <AlertasParalisadas paralisadas={paralisadas} />
+
         {/* ─── Cards de resumo ─── */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {/* Efetivo total */}
@@ -644,6 +801,96 @@ export default function Dashboard() {
             )}
           </div>
         </div>
+
+        {/* ─── KPIs de avanço planejado vs real ─── */}
+        {resumo && <KpiCards resumo={resumo} />}
+
+        {/* ─── Curva S ─── */}
+        {dadosCurvaS.length > 1 && <CurvaS dados={dadosCurvaS} />}
+
+        {/* ─── Cards de avanço real ─── */}
+        {isHoje && (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* Card 1: Avanço Real de Hoje */}
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center text-xl">📈</div>
+                <p className="text-sm text-slate-500 font-medium">Avanço Real de Hoje</p>
+              </div>
+              {avancoRealHoje !== null ? (
+                <>
+                  <p className={`text-4xl font-bold ${
+                    avancoRealHoje >= 80 ? 'text-green-600' :
+                    avancoRealHoje >= 50 ? 'text-yellow-600' : 'text-red-600'
+                  }`}>{avancoRealHoje}%</p>
+                  <div className="w-full bg-slate-100 rounded-full h-2 mt-2">
+                    <div
+                      className={`h-2 rounded-full ${avancoRealHoje >= 80 ? 'bg-green-500' : avancoRealHoje >= 50 ? 'bg-yellow-400' : 'bg-red-400'}`}
+                      style={{ width: `${avancoRealHoje}%` }}
+                    />
+                  </div>
+                  <p className="text-xs text-slate-400 mt-1">média das atividades com apontamento</p>
+                </>
+              ) : (
+                <>
+                  <p className="text-2xl font-bold text-slate-300">—</p>
+                  <p className="text-xs text-slate-400 mt-1">sem apontamentos hoje</p>
+                </>
+              )}
+            </div>
+
+            {/* Card 2: Efetivo Real vs Previsto */}
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="w-10 h-10 bg-teal-100 rounded-lg flex items-center justify-center text-xl">👥</div>
+                <p className="text-sm text-slate-500 font-medium">Efetivo Real vs Previsto</p>
+              </div>
+              <div className="flex items-end gap-2">
+                <p className="text-4xl font-bold text-teal-600">{efetivoRealHoje}</p>
+                <p className="text-lg text-slate-400 mb-0.5">/ {totalEfetivo}</p>
+              </div>
+              {totalEfetivo > 0 && (
+                <>
+                  <div className="flex gap-1 mt-2">
+                    <div className="h-2 rounded-l-full bg-teal-500" style={{ width: `${Math.min(100, Math.round(efetivoRealHoje / totalEfetivo * 100))}%` }} />
+                    <div className="h-2 rounded-r-full bg-slate-100 flex-1" />
+                  </div>
+                  <p className="text-xs text-slate-400 mt-1">
+                    {totalEfetivo > 0 ? `${Math.round(efetivoRealHoje / totalEfetivo * 100)}% de aderência` : '—'}
+                  </p>
+                </>
+              )}
+              {totalEfetivo === 0 && (
+                <p className="text-xs text-slate-400 mt-1">nenhum efetivo previsto hoje</p>
+              )}
+            </div>
+
+            {/* Card 3: Atividades Sem Apontamento */}
+            <button
+              onClick={() => router.push(`/obras/${obraId}/apontamentos`)}
+              className={`bg-white rounded-xl border shadow-sm p-5 text-left transition-colors hover:bg-slate-50 ${
+                atividadesSemApontamento.length > 0 ? 'border-red-200' : 'border-slate-200'
+              }`}
+            >
+              <div className="flex items-center gap-3 mb-3">
+                <div className={`w-10 h-10 rounded-lg flex items-center justify-center text-xl ${
+                  atividadesSemApontamento.length > 0 ? 'bg-red-100' : 'bg-green-100'
+                }`}>
+                  {atividadesSemApontamento.length > 0 ? '⚠️' : '✅'}
+                </div>
+                <p className="text-sm text-slate-500 font-medium">Sem Apontamento Hoje</p>
+              </div>
+              <p className={`text-4xl font-bold ${atividadesSemApontamento.length > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                {atividadesSemApontamento.length}
+              </p>
+              <p className="text-xs text-slate-400 mt-1">
+                {atividadesSemApontamento.length === 0
+                  ? 'todas as atividades apontadas'
+                  : 'atividades aguardando apontamento — clique para registrar'}
+              </p>
+            </button>
+          </div>
+        )}
 
         {/* ─── Corpo principal ─── */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
@@ -821,6 +1068,22 @@ export default function Dashboard() {
             )}
           </div>
         </div>
+
+        {/* ─── Grid efetivo previsto vs real ─── */}
+        {atividadesDoDia.length > 0 && (
+          <GridEfetivo
+            atividades={atividadesDoDia as import('@/app/lib/types').Atividade[]}
+            apontamentosHoje={apontamentosHoje}
+            desvios={desvios}
+          />
+        )}
+
+        {/* ─── Atividades em atenção ─── */}
+        <TabelaAtencao
+          itens={itensAtencao}
+          historicoPorAtividade={historicoPorAtividade}
+          hoje={dataSelecionada}
+        />
 
         {/* ─── Navegação rápida ─── */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

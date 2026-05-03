@@ -55,3 +55,121 @@ export interface Versao {
   snapshot: { pavimentos?: SnapshotPavimento[] } | null;
   created_at: string;
 }
+// Adicione esses tipos ao seu types.ts existente
+
+// ============================================
+// APONTAMENTOS REAIS
+// ============================================
+
+export type StatusAtividade =
+  | 'NAO_INICIADA'
+  | 'INICIADA'
+  | 'EM_ANDAMENTO'
+  | 'CONCLUIDA_NO_DIA'
+  | 'PARALISADA'
+
+export interface ApontamentoDiario {
+  id: string;
+  atividade_id: number;
+  data: string; // YYYY-MM-DD
+  efetivo_real: number;
+  percentual_executado: number; // 0-100
+  status?: StatusAtividade;
+  observacao?: string;
+  responsavel?: string;
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CurvaSPoint {
+  data: string;       // 'YYYY-MM-DD'
+  diasUteis: number;  // posição no eixo X (apenas dias úteis)
+  previsto: number;   // % acumulado previsto
+  real: number;       // % acumulado real
+}
+
+export interface Medicao {
+  id: string;
+  atividade_id: number;
+  apontamento_id?: string;
+  data_medicao: string; // YYYY-MM-DD
+  quantidade_executada?: number;
+  unidade?: string;
+  responsavel?: string;
+  foto_url?: string;
+  observacao?: string;
+  created_by?: string;
+  created_at: string;
+}
+
+export interface TokenApontamento {
+  id: string;
+  obra_id: number;
+  token: string;
+  nome_responsavel?: string;
+  pin: string;
+  ativo: boolean;
+  created_by?: string;
+  created_at: string;
+  expires_at?: string;
+}
+
+export interface LogUpload {
+  id: string;
+  obra_id?: number;
+  arquivo_nome: string;
+  arquivo_tamanho: number; // em bytes
+  bucket: string;
+  status: 'sucesso' | 'falha';
+  erro_mensagem?: string;
+  user_id?: string;
+  created_at: string;
+}
+
+export interface StorageQuota {
+  id: string;
+  empresa_id: string;
+  storage_usado_bytes: number;
+  storage_limite_bytes: number;
+  plano: 'free' | 'pro' | 'empresa';
+  percentual_usado: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ApontamentoComMedicoes extends ApontamentoDiario {
+  medicoes: Medicao[];
+  avancoPercentualAcumulado?: number;
+}
+
+// Para cálculos de avanço
+export interface DesvioAtividade {
+  atividade_id: number;
+  nome_atividade: string;
+  percentual_previsto: number;
+  percentual_real: number;
+  desvio_percentual: number;
+  dias_atraso: number;
+  status: 'no_prazo' | 'atrasado' | 'adiantado';
+  status_apontamento?: StatusAtividade;
+}
+
+export interface DeltaEfetivo {
+  previsto: number;
+  real: number;
+  delta: number;
+  critico: boolean; // real < previsto * 0.7
+}
+
+export interface ResumoAvancoObra {
+  percentual_conclusao_geral: number;
+  avanço_previsto: number;
+  avanço_real: number;
+  dias_atraso_geral: number;
+  efetivo_previsto_total: number;
+  efetivo_real_total: number;
+  aderencia_efetivo: number; // percentual
+  atividades_atrasadas: DesvioAtividade[];
+  data_calculo: string;
+}

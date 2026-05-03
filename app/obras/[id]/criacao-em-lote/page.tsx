@@ -2,7 +2,7 @@
 
 import { useState, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { createClient } from '@supabase/supabase-js';
+import { createClient } from '@/lib/supabase/client';
 
 // ─────────────────────────── Tipos ───────────────────────────
 interface PavimentoEspecial {
@@ -103,12 +103,7 @@ export default function CriacaoEmLote() {
   const [mensagem, setMensagem] = useState<{ tipo: 'success' | 'error'; texto: string } | null>(null);
   const [expandido, setExpandido] = useState<string[]>([blocos[0].id]);
 
-  const supabase = useMemo(() => {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-    if (!url || !key) throw new Error('Credenciais não configuradas');
-    return createClient(url, key);
-  }, []);
+  const supabase = createClient();
 
   // Total de pavimentos que serão criados
   const totalPavimentos = blocos.reduce(

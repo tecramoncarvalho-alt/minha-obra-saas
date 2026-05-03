@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { createClient } from '@supabase/supabase-js';
+import { createClient } from '@/lib/supabase/client';
 
 // ─────────────────────────── Tipos ───────────────────────────
 interface Obra {
@@ -207,12 +207,7 @@ export default function ObraDetalhes() {
     });
   };
 
-  const supabase = useMemo(() => {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-    if (!url || !key) throw new Error('Credenciais não configuradas');
-    return createClient(url, key);
-  }, []);
+  const supabase = createClient();
 
   useEffect(() => {
     fetchObraEPavimentos();
@@ -221,7 +216,7 @@ export default function ObraDetalhes() {
       setExpandido([b[0].id]);
       return b;
     });
-  }, [obraId, supabase]);
+  }, [obraId]);
 
   const fetchObraEPavimentos = async () => {
     try {
@@ -302,7 +297,7 @@ export default function ObraDetalhes() {
       const { data: pavs, error: e1 } = await supabase.from('pavimentos').select('id').eq('obra_id', obraId);
       if (e1) { alert('❌ Erro ao buscar pavimentos: ' + e1.message); setExcluindoObra(false); return; }
 
-      const pavIds = (pavs || []).map(p => p.id);
+      const pavIds = (pavs || []).map((p: Pavimento) => p.id);
       console.log('Pavimentos:', pavIds);
 
       if (pavIds.length > 0) {
@@ -310,7 +305,7 @@ export default function ObraDetalhes() {
         const { data: ativs, error: e2 } = await supabase.from('atividades').select('id').in('pavimento_id', pavIds);
         if (e2) { alert('❌ Erro ao buscar atividades: ' + e2.message); setExcluindoObra(false); return; }
 
-        const ativIds = (ativs || []).map(a => a.id);
+        const ativIds = (ativs || []).map((a: { id: number }) => a.id);
         console.log('Atividades:', ativIds);
 
         if (ativIds.length > 0) {

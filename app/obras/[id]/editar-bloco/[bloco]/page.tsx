@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { createClient } from '@supabase/supabase-js';
+import { createClient } from '@/lib/supabase/client';
 
 interface Obra {
   id: number;
@@ -68,16 +68,11 @@ export default function EditarBloco() {
   const [pavimentoParaExcluir, setPavimentoParaExcluir] = useState<Pavimento | null>(null);
   const [excluindo, setExcluindo] = useState(false);
 
-  const supabase = useMemo(() => {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-    if (!url || !key) throw new Error('Credenciais não configuradas');
-    return createClient(url, key);
-  }, []);
+  const supabase = createClient();
 
   useEffect(() => {
     fetchDados(blocoNomeUrl);
-  }, [obraId, supabase]);
+  }, [obraId]);
 
   const fetchDados = async (nomeDoBloco: string) => {
     try {
@@ -94,7 +89,7 @@ export default function EditarBloco() {
         .order('numero', { ascending: false });
 
       if (pavData) {
-        const pavDoBloco = pavData.filter(p =>
+        const pavDoBloco = pavData.filter((p: Pavimento) =>
           p.nome === nomeDoBloco || p.nome.startsWith(`${nomeDoBloco} - `)
         );
 
@@ -167,7 +162,7 @@ export default function EditarBloco() {
         .order('numero', { ascending: false });
 
       if (pavData) {
-        const pavDoBloco = pavData.filter(p =>
+        const pavDoBloco = pavData.filter((p: Pavimento) =>
           p.nome === nomeAtualizado || p.nome.startsWith(`${nomeAtualizado} - `)
         );
         setPavimentos(pavDoBloco);
@@ -207,7 +202,7 @@ export default function EditarBloco() {
           .from('pavimentos').select('*').eq('obra_id', obraId).order('numero', { ascending: false });
 
         if (pavData) {
-          setPavimentos(pavData.filter(p =>
+          setPavimentos(pavData.filter((p: Pavimento) =>
             p.nome === nomeBlocoAtual || p.nome.startsWith(`${nomeBlocoAtual} - `)
           ));
         }
@@ -241,7 +236,7 @@ export default function EditarBloco() {
           .from('pavimentos').select('*').eq('obra_id', obraId).order('numero', { ascending: false });
 
         if (pavData) {
-          setPavimentos(pavData.filter(p =>
+          setPavimentos(pavData.filter((p: Pavimento) =>
             p.nome === nomeBlocoAtual || p.nome.startsWith(`${nomeBlocoAtual} - `)
           ));
         }
@@ -289,7 +284,7 @@ export default function EditarBloco() {
           .from('pavimentos').select('*').eq('obra_id', obraId).order('numero', { ascending: false });
 
         if (pavData) {
-          setPavimentos(pavData.filter(p =>
+          setPavimentos(pavData.filter((p: Pavimento) =>
             p.nome === nomeBlocoAtual || p.nome.startsWith(`${nomeBlocoAtual} - `)
           ));
         }
