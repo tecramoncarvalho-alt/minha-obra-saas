@@ -38,22 +38,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const supabase = useMemo(() => createClient(), [])
 
   const loadEmpresa = async (userId: string) => {
-    const { data, error } = await supabase
+    // Two-step query: avoid embedded join which can return null due to RLS on empresas table
+    const { data: membership, error } = await supabase
       .from('usuarios_empresas')
-      .select('role, empresas(id, nome)')
+      .select('role, empresa_id')
       .eq('user_id', userId)
-      .single()
+      .maybeSingle()
 
-    if (error) console.error('[loadEmpresa] erro:', error.code, error.message)
+    if (error) console.error('[loadEmpresa] erro membership:', error.code, error.message)
+    if (!membership?.empresa_id) { setEmpresa(null); setRole(null); return }
 
-    if (data?.empresas) {
-      const emp = data.empresas as Empresa
-      setEmpresa(emp)
-      setRole(data.role as Role)
-    } else {
-      setEmpresa(null)
-      setRole(null)
-    }
+    setRole(membership.role as Role)
+
+    const { data: emp, error: empError } = await supabase
+      .from('empresas')
+      .select('id, nome')
+      .eq('id', membership.empresa_id)
+      .maybeSingle()
+
+    if (empError) console.error('[loadEmpresa] erro empresa:', empError.code, empError.message)
+    if (emp) setEmpresa(emp as Empresa)
+    else setEmpresa(null)
   }
 
   useEffect(() => {
@@ -72,7 +77,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event: AuthChangeEvent, session: Session | null) => {
-        if (event === 'INITIAL_SESSION') return
+        // INITIAL_SESSION is handled by getSession() above
+        // TOKEN_REFRESHED only rotates the token — empresa is already loaded
+        if (event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED') return
         setUser(session?.user ?? null)
         if (session?.user) {
           try {
