@@ -57,17 +57,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   useEffect(() => {
-    // Bootstrap initial session from storage — never blocks on network
+    // Failsafe: if getSession() or loadEmpresa() hang (e.g. network issue or
+    // incompatible API key format), release the loading state after 8 seconds
+    const failsafe = setTimeout(() => setLoading(false), 8000)
+
     supabase.auth.getSession().then(async ({ data: { session } }: { data: { session: Session | null } }) => {
       setUser(session?.user ?? null)
       if (session?.user) {
         try { await loadEmpresa(session.user.id) } catch { setEmpresa(null); setRole(null) }
       }
+      clearTimeout(failsafe)
       setLoading(false)
-    }).catch(() => setLoading(false))
+    }).catch(() => { clearTimeout(failsafe); setLoading(false) })
 
-    // Handle future changes (login, logout, token refresh) — skip INITIAL_SESSION
-    // because getSession() above already handles the initial state
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event: AuthChangeEvent, session: Session | null) => {
         if (event === 'INITIAL_SESSION') return
@@ -86,7 +88,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setLoading(false)
       }
     )
-    return () => subscription.unsubscribe()
+    return () => { subscription.unsubscribe(); clearTimeout(failsafe) }
   }, [])
 
   // Redireciona para /setup se autenticado mas sem empresa vinculada
