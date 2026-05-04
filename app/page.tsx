@@ -33,6 +33,10 @@ export default function Home() {
     if (!authLoading && empresa) fetchObras();
   }, [authLoading, empresa]);
 
+  useEffect(() => {
+    obras.forEach(obra => router.prefetch(`/obras/${obra.id}`));
+  }, [obras, router]);
+
   const fetchObras = async () => {
     if (!empresa) return;
     try {

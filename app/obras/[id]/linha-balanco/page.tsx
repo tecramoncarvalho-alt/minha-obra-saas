@@ -256,7 +256,9 @@ export default function LinhaDeBalanco() {
   const supabase = createClient();
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { fetchDados(); fetchVersoes(); }, [obraId]);
+  useEffect(() => { void Promise.all([fetchDados(), fetchVersoes()]); }, [obraId]);
+
+  useEffect(() => { router.prefetch(`/obras/${obraId}/dashboard`); }, [obraId, router]);
 
   // Buscar apontamentos mais recentes por atividade quando o toggle é ativado
   useEffect(() => {
@@ -305,15 +307,15 @@ export default function LinhaDeBalanco() {
   const fetchDados = async () => {
     try {
       setLoading(true);
-      const { data: obraData } = await supabase.from('obras').select('*').eq('id', obraId).single();
-      if (obraData) setObra(obraData);
+      const [obraResult, ferResult, pavResult] = await Promise.all([
+        supabase.from('obras').select('*').eq('id', obraId).single(),
+        supabase.from('feriados').select('*').eq('obra_id', obraId),
+        supabase.from('pavimentos').select('*').eq('obra_id', obraId).order('numero', { ascending: false }),
+      ]);
+      if (obraResult.data) setObra(obraResult.data);
+      setFeriados(ferResult.data || []);
 
-      // Feriados
-      const { data: ferData } = await supabase.from('feriados').select('*').eq('obra_id', obraId);
-      setFeriados(ferData || []);
-
-      const { data: pavData } = await supabase
-        .from('pavimentos').select('*').eq('obra_id', obraId).order('numero', { ascending: false });
+      const pavData = pavResult.data;
       if (!pavData) return;
 
       const grupos = agruparPorBloco(pavData);

@@ -20,6 +20,9 @@
     "recharts": "^3.8.1",
     "zod": "^4.4.2"
   },
+  "overrides": {
+    "postcss": "^8.5.10"
+  },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
