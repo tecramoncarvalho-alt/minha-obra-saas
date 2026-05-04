@@ -10,8 +10,6 @@ import type { ApontamentoDiario, Medicao, StorageQuota, StatusAtividade } from '
 import { ApontamentoDiarioSchema } from '@/app/lib/schemas'
 import UploadFoto from './components/UploadFoto'
 
-const supabase = createClient()
-
 interface Obra { id: number; nome: string }
 interface Atividade {
   id: number
@@ -79,6 +77,7 @@ function formatBytes(bytes: number): string {
 }
 
 export default function ApontamentosPage() {
+  const supabase = createClient()
   const { id } = useParams<{ id: string }>()
   const obraId = Number(id)
   const router = useRouter()
