@@ -35,10 +35,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true)
   const router = useRouter()
   const pathname = usePathname()
-  const supabase = useMemo(() => createClient(), [])
+  // createClient() reads NEXT_PUBLIC_* vars — only safe in browser (not during SSR/static generation)
+  // All auth operations are in useEffect, so null on server is fine
+  const supabase = useMemo(() => (typeof window === 'undefined' ? null : createClient()), [])
 
   const loadEmpresa = async (userId: string) => {
-    const { data, error } = await supabase
+    const { data, error } = await supabase!
       .from('usuarios_empresas')
       .select('role, empresas(id, nome)')
       .eq('user_id', userId)
@@ -57,6 +59,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   useEffect(() => {
+    if (!supabase) { setLoading(false); return }
+
     // Bootstrap initial session from storage — never blocks on network
     supabase.auth.getSession().then(async ({ data: { session } }: { data: { session: Session | null } }) => {
       setUser(session?.user ?? null)
@@ -87,7 +91,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     )
     return () => subscription.unsubscribe()
-  }, [])
+  }, [supabase])
 
   // Redireciona para /setup se autenticado mas sem empresa vinculada
   useEffect(() => {
@@ -97,7 +101,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [loading, user, empresa, pathname])
 
   const signOut = async () => {
-    await supabase.auth.signOut()
+    await supabase?.auth.signOut()
     router.push('/login')
   }
 
