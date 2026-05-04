@@ -64,7 +64,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         try { await loadEmpresa(session.user.id) } catch { setEmpresa(null); setRole(null) }
       }
       setLoading(false)
-    })
+    }).catch(() => setLoading(false))
 
     // Handle future changes (login, logout, token refresh) — skip INITIAL_SESSION
     // because getSession() above already handles the initial state

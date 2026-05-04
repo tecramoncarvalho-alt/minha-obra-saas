@@ -477,7 +477,7 @@ export default function ApontamentosPage() {
                               empresaId={empresa.id}
                               obraId={obraId}
                               atividadeId={at.id}
-                              onUploadSucesso={() => {}}
+                              onUploadSucesso={() => fetchDados()}
                               onUploadErro={(msg) => setMensagens(prev => ({ ...prev, [at.id]: { tipo: 'erro', texto: msg } }))}
                             />
                           </div>
