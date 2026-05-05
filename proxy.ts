@@ -25,7 +25,8 @@ export async function proxy(request: NextRequest) {
     }
   )
 
-  const { data: { user } } = await supabase.auth.getUser()
+  const { data: { session } } = await supabase.auth.getSession()
+  const user = session?.user ?? null
 
   const path = request.nextUrl.pathname
   const isPublic = PUBLIC_PATHS.some(p => path.startsWith(p))

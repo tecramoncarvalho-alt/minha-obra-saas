@@ -19,9 +19,9 @@ interface Obra {
 
 export default function Home() {
   const router = useRouter();
-  const { empresa, loading: authLoading, empresaFetched } = useAuth();
+  const { empresa, loading: authLoading } = useAuth();
   const [obras, setObras] = useState<Obra[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [formData, setFormData] = useState({
     nome: '', descricao: '', data_inicio: '', data_fim: '',
   });
@@ -73,7 +73,7 @@ export default function Home() {
     setSubmitting(false);
   };
 
-  if (authLoading || (!empresa && !empresaFetched)) {
+  if (authLoading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 flex items-center justify-center">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
