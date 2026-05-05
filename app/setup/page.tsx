@@ -40,29 +40,16 @@ export default function SetupPage() {
     setLoading(true)
     setError('')
 
-    const { data: { session } } = await supabase.auth.getSession()
-    if (!session?.user) { router.replace('/login'); return }
+    const res = await fetch('/api/setup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nomeEmpresa: nomeEmpresa.trim() }),
+    })
 
-    // Cria empresa
-    const { data: empresa, error: errEmpresa } = await supabase
-      .from('empresas')
-      .insert({ nome: nomeEmpresa.trim() })
-      .select()
-      .single()
+    const json = await res.json()
 
-    if (errEmpresa || !empresa) {
-      setError(`Erro ao criar empresa: ${errEmpresa?.message ?? 'resposta vazia'}`)
-      setLoading(false)
-      return
-    }
-
-    // Vincula usuário como admin
-    const { error: errVinculo } = await supabase
-      .from('usuarios_empresas')
-      .insert({ user_id: session.user.id, empresa_id: empresa.id, role: 'admin' })
-
-    if (errVinculo) {
-      setError(`Erro ao vincular usuário: ${errVinculo.message}`)
+    if (!res.ok) {
+      setError(json.error ?? 'Erro ao criar empresa. Tente novamente.')
       setLoading(false)
       return
     }
