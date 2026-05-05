@@ -13,7 +13,7 @@ export default function SetupPage() {
   const supabase = useMemo(() => createClient(), [])
 
   useEffect(() => {
-    const fallback = setTimeout(() => setChecking(false), 5000)
+    const fallback = setTimeout(() => setChecking(false), 15000)
     const verificar = async () => {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session?.user) { clearTimeout(fallback); router.replace('/login'); return }
@@ -49,6 +49,10 @@ export default function SetupPage() {
     const json = await res.json()
 
     if (!res.ok) {
+      if (res.status === 400 && json.error?.includes('já possui')) {
+        window.location.href = '/'
+        return
+      }
       setError(json.error ?? 'Erro ao criar empresa. Tente novamente.')
       setLoading(false)
       return
