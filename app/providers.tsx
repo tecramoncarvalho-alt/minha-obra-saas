@@ -48,7 +48,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       .eq('user_id', userId)
       .maybeSingle()
 
-    if (error) console.error('[loadEmpresa] erro membership:', error.code, error.message)
+    if (error) {
+      console.error('[loadEmpresa] erro membership:', error.code, error.message)
+      // Erro de DB não é confirmação de "sem empresa" — não redireciona para /setup
+      setEmpresa(null); setRole(null)
+      return
+    }
     if (!membership?.empresa_id) { setEmpresa(null); setRole(null); setEmpresaFetched(true); return }
 
     setRole(membership.role as Role)
@@ -59,7 +64,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       .eq('id', membership.empresa_id)
       .maybeSingle()
 
-    if (empError) console.error('[loadEmpresa] erro empresa:', empError.code, empError.message)
+    if (empError) {
+      console.error('[loadEmpresa] erro empresa:', empError.code, empError.message)
+      // Erro de DB — não redireciona para /setup
+      setEmpresa(null)
+      return
+    }
     if (emp) setEmpresa(emp as Empresa)
     else setEmpresa(null)
     setEmpresaFetched(true)

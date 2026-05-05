@@ -19,7 +19,7 @@ interface Obra {
 
 export default function Home() {
   const router = useRouter();
-  const { empresa, loading: authLoading } = useAuth();
+  const { empresa, loading: authLoading, empresaFetched } = useAuth();
   const [obras, setObras] = useState<Obra[]>([]);
   const [loading, setLoading] = useState(true);
   const [formData, setFormData] = useState({
@@ -41,11 +41,12 @@ export default function Home() {
     if (!empresa) return;
     try {
       setLoading(true);
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('obras')
         .select('*')
         .eq('empresa_id', empresa.id)
         .order('created_at', { ascending: false });
+      if (error) console.error('[fetchObras] erro:', error.code, error.message)
       setObras(data || []);
     } finally { setLoading(false); }
   };
@@ -72,7 +73,7 @@ export default function Home() {
     setSubmitting(false);
   };
 
-  if (authLoading) {
+  if (authLoading || (!empresa && !empresaFetched)) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 flex items-center justify-center">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
