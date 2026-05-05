@@ -148,7 +148,7 @@ export default function Home() {
                     >
                       <div className="w-16 h-16 rounded-lg overflow-hidden flex-shrink-0 bg-slate-100 flex items-center justify-center border border-slate-200 relative">
                         {obra.foto_url ? (
-                          <Image src={obra.foto_url} alt={obra.nome} fill className="object-cover" />
+                          <Image src={obra.foto_url} alt={obra.nome} fill sizes="64px" className="object-cover" />
                         ) : (
                           <span className="text-2xl">🏗️</span>
                         )}
