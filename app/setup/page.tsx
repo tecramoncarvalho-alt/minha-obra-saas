@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { useAuth } from '@/app/providers'
 
 export default function SetupPage() {
   const [nomeEmpresa, setNomeEmpresa] = useState('')
@@ -11,6 +12,14 @@ export default function SetupPage() {
   const [error, setError] = useState('')
   const router = useRouter()
   const supabase = useMemo(() => createClient(), [])
+  const { empresa, empresaFetched } = useAuth()
+
+  // Se o AuthProvider carregar a empresa enquanto estamos aqui, redireciona
+  useEffect(() => {
+    if (empresaFetched && empresa) {
+      window.location.href = '/'
+    }
+  }, [empresaFetched, empresa])
 
   useEffect(() => {
     const fallback = setTimeout(() => setChecking(false), 15000)
