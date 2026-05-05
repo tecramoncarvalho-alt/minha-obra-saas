@@ -13,9 +13,10 @@ export default function SetupPage() {
   const supabase = useMemo(() => createClient(), [])
 
   useEffect(() => {
+    const fallback = setTimeout(() => setChecking(false), 5000)
     const verificar = async () => {
       const { data: { session } } = await supabase.auth.getSession()
-      if (!session?.user) { router.replace('/login'); return }
+      if (!session?.user) { clearTimeout(fallback); router.replace('/login'); return }
 
       const { data } = await supabase
         .from('usuarios_empresas')
@@ -23,13 +24,14 @@ export default function SetupPage() {
         .eq('user_id', session.user.id)
         .maybeSingle()
 
+      clearTimeout(fallback)
       if (data?.empresa_id) {
         window.location.href = '/'
       } else {
         setChecking(false)
       }
     }
-    verificar().catch(() => setChecking(false))
+    verificar().catch(() => { clearTimeout(fallback); setChecking(false) })
   }, [])
 
   const handleSubmit = async (e: React.FormEvent) => {

@@ -18,6 +18,7 @@ interface AuthContextType {
   role: Role | null
   signOut: () => Promise<void>
   loading: boolean
+  empresaFetched: boolean
 }
 
 const AuthContext = createContext<AuthContextType>({
@@ -26,6 +27,7 @@ const AuthContext = createContext<AuthContextType>({
   role: null,
   signOut: async () => {},
   loading: true,
+  empresaFetched: false,
 })
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -33,6 +35,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [empresa, setEmpresa] = useState<Empresa | null>(null)
   const [role, setRole] = useState<Role | null>(null)
   const [loading, setLoading] = useState(true)
+  const [empresaFetched, setEmpresaFetched] = useState(false)
   const router = useRouter()
   const pathname = usePathname()
   const supabase = useMemo(() => createClient(), [])
@@ -46,7 +49,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       .maybeSingle()
 
     if (error) console.error('[loadEmpresa] erro membership:', error.code, error.message)
-    if (!membership?.empresa_id) { setEmpresa(null); setRole(null); return }
+    if (!membership?.empresa_id) { setEmpresa(null); setRole(null); setEmpresaFetched(true); return }
 
     setRole(membership.role as Role)
 
@@ -59,21 +62,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (empError) console.error('[loadEmpresa] erro empresa:', empError.code, empError.message)
     if (emp) setEmpresa(emp as Empresa)
     else setEmpresa(null)
+    setEmpresaFetched(true)
   }
 
   useEffect(() => {
-    // Failsafe: if getSession() or loadEmpresa() hang (e.g. network issue or
-    // incompatible API key format), release the loading state after 8 seconds
+    // failsafe: libera a tela de loading após 8s
     const failsafe = setTimeout(() => setLoading(false), 8000)
+    // empresaFailsafe: se loadEmpresa travar por mais de 20s, libera o redirect para /setup
+    const empresaFailsafe = setTimeout(() => setEmpresaFetched(true), 20000)
 
     supabase.auth.getSession().then(async ({ data: { session } }: { data: { session: Session | null } }) => {
       setUser(session?.user ?? null)
       if (session?.user) {
-        try { await loadEmpresa(session.user.id) } catch { setEmpresa(null); setRole(null) }
+        try { await loadEmpresa(session.user.id) } catch { setEmpresa(null); setRole(null); setEmpresaFetched(true) }
+      } else {
+        setEmpresaFetched(true)
       }
       clearTimeout(failsafe)
+      clearTimeout(empresaFailsafe)
       setLoading(false)
-    }).catch(() => { clearTimeout(failsafe); setLoading(false) })
+    }).catch(() => { clearTimeout(failsafe); clearTimeout(empresaFailsafe); setLoading(false); setEmpresaFetched(true) })
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event: AuthChangeEvent, session: Session | null) => {
@@ -87,23 +95,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           } catch {
             setEmpresa(null)
             setRole(null)
+            setEmpresaFetched(true)
           }
         } else {
           setEmpresa(null)
           setRole(null)
+          setEmpresaFetched(true)
         }
         setLoading(false)
       }
     )
-    return () => { subscription.unsubscribe(); clearTimeout(failsafe) }
+    return () => { subscription.unsubscribe(); clearTimeout(failsafe); clearTimeout(empresaFailsafe) }
   }, [])
 
-  // Redireciona para /setup se autenticado mas sem empresa vinculada
+  // Só redireciona para /setup quando loadEmpresa confirmou que não há empresa
+  // (empresaFetched=true). O failsafe de loading não deve disparar o redirect.
   useEffect(() => {
-    if (!loading && user && !empresa && pathname !== '/setup') {
+    if (!loading && empresaFetched && user && !empresa && pathname !== '/setup') {
       router.replace('/setup')
     }
-  }, [loading, user, empresa, pathname])
+  }, [loading, empresaFetched, user, empresa, pathname])
 
   const signOut = async () => {
     await supabase.auth.signOut()
@@ -111,7 +122,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, empresa, role, signOut, loading }}>
+    <AuthContext.Provider value={{ user, empresa, role, signOut, loading, empresaFetched }}>
       {children}
     </AuthContext.Provider>
   )
