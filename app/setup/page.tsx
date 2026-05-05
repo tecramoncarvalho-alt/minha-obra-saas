@@ -14,23 +14,22 @@ export default function SetupPage() {
 
   useEffect(() => {
     const verificar = async () => {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) { router.replace('/login'); return }
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session?.user) { router.replace('/login'); return }
 
-      // Se já tem empresa, redireciona para home
       const { data } = await supabase
         .from('usuarios_empresas')
         .select('empresa_id')
-        .eq('user_id', user.id)
-        .single()
+        .eq('user_id', session.user.id)
+        .maybeSingle()
 
       if (data?.empresa_id) {
-        router.replace('/')
+        window.location.href = '/'
       } else {
         setChecking(false)
       }
     }
-    verificar()
+    verificar().catch(() => setChecking(false))
   }, [])
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -66,8 +65,7 @@ export default function SetupPage() {
       return
     }
 
-    router.push('/')
-    router.refresh()
+    window.location.href = '/'
   }
 
   if (checking) {
