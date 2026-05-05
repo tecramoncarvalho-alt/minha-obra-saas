@@ -66,10 +66,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   useEffect(() => {
-    // failsafe: libera a tela de loading após 8s
+    // failsafe: libera a tela de loading após 8s (não afeta o redirect para /setup)
     const failsafe = setTimeout(() => setLoading(false), 8000)
-    // empresaFailsafe: se loadEmpresa travar por mais de 20s, libera o redirect para /setup
-    const empresaFailsafe = setTimeout(() => setEmpresaFetched(true), 20000)
 
     supabase.auth.getSession().then(async ({ data: { session } }: { data: { session: Session | null } }) => {
       setUser(session?.user ?? null)
@@ -79,9 +77,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setEmpresaFetched(true)
       }
       clearTimeout(failsafe)
-      clearTimeout(empresaFailsafe)
       setLoading(false)
-    }).catch(() => { clearTimeout(failsafe); clearTimeout(empresaFailsafe); setLoading(false); setEmpresaFetched(true) })
+    }).catch(() => { clearTimeout(failsafe); setLoading(false); setEmpresaFetched(true) })
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event: AuthChangeEvent, session: Session | null) => {
@@ -105,7 +102,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setLoading(false)
       }
     )
-    return () => { subscription.unsubscribe(); clearTimeout(failsafe); clearTimeout(empresaFailsafe) }
+    return () => { subscription.unsubscribe(); clearTimeout(failsafe) }
   }, [])
 
   // Só redireciona para /setup quando loadEmpresa confirmou que não há empresa
