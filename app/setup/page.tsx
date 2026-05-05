@@ -40,8 +40,8 @@ export default function SetupPage() {
     setLoading(true)
     setError('')
 
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) { router.replace('/login'); return }
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session?.user) { router.replace('/login'); return }
 
     // Cria empresa
     const { data: empresa, error: errEmpresa } = await supabase
@@ -51,7 +51,7 @@ export default function SetupPage() {
       .single()
 
     if (errEmpresa || !empresa) {
-      setError('Erro ao criar empresa. Tente novamente.')
+      setError(`Erro ao criar empresa: ${errEmpresa?.message ?? 'resposta vazia'}`)
       setLoading(false)
       return
     }
@@ -59,10 +59,10 @@ export default function SetupPage() {
     // Vincula usuário como admin
     const { error: errVinculo } = await supabase
       .from('usuarios_empresas')
-      .insert({ user_id: user.id, empresa_id: empresa.id, role: 'admin' })
+      .insert({ user_id: session.user.id, empresa_id: empresa.id, role: 'admin' })
 
     if (errVinculo) {
-      setError('Erro ao vincular usuário. Tente novamente.')
+      setError(`Erro ao vincular usuário: ${errVinculo.message}`)
       setLoading(false)
       return
     }
