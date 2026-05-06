@@ -42,18 +42,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const loadEmpresa = async (userId: string) => {
     // Two-step query: avoid embedded join which can return null due to RLS on empresas table
-    const { data: membership, error } = await supabase
+    // Retry once on DB error — Supabase free tier can be slow on cold start
+    const membershipQuery = () => supabase
       .from('usuarios_empresas')
       .select('role, empresa_id')
       .eq('user_id', userId)
       .maybeSingle()
 
+    let { data: membership, error } = await membershipQuery()
+
     if (error) {
-      console.error('[loadEmpresa] erro membership:', error.code, error.message)
-      // Erro de DB não é confirmação de "sem empresa" — não redireciona para /setup
-      setEmpresa(null); setRole(null)
-      return
+      console.error('[loadEmpresa] erro membership (tentativa 1):', error.code)
+      await new Promise(r => setTimeout(r, 3000))
+      ;({ data: membership, error } = await membershipQuery())
+      if (error) {
+        console.error('[loadEmpresa] erro membership (tentativa 2):', error.code)
+        setEmpresa(null); setRole(null)
+        return // DB indisponível — não redireciona para /setup
+      }
     }
+
     if (!membership?.empresa_id) { setEmpresa(null); setRole(null); setEmpresaFetched(true); return }
 
     setRole(membership.role as Role)
@@ -66,9 +74,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     if (empError) {
       console.error('[loadEmpresa] erro empresa:', empError.code, empError.message)
-      // Erro de DB — não redireciona para /setup
       setEmpresa(null)
-      return
+      return // DB indisponível — não redireciona para /setup
     }
     if (emp) setEmpresa(emp as Empresa)
     else setEmpresa(null)

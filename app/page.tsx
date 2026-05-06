@@ -19,7 +19,7 @@ interface Obra {
 
 export default function Home() {
   const router = useRouter();
-  const { empresa, loading: authLoading } = useAuth();
+  const { empresa, loading: authLoading, empresaFetched } = useAuth();
   const [obras, setObras] = useState<Obra[]>([]);
   const [loading, setLoading] = useState(false);
   const [formData, setFormData] = useState({
@@ -128,7 +128,7 @@ export default function Home() {
             <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
               <h2 className="text-lg font-semibold text-slate-900 mb-5">📊 Minhas Obras</h2>
 
-              {loading ? (
+              {(loading || (!empresa && !empresaFetched)) ? (
                 <div className="text-center py-12">
                   <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mb-3"></div>
                   <p className="text-slate-500">Carregando...</p>
