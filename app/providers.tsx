@@ -40,56 +40,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const supabase = useMemo(() => createClient(), [])
 
-  const loadEmpresa = async (userId: string) => {
-    // Two-step query: avoid embedded join which can return null due to RLS on empresas table
-    // Retry once on DB error — Supabase free tier can be slow on cold start
-    const membershipQuery = () => supabase
-      .from('usuarios_empresas')
-      .select('role, empresa_id')
-      .eq('user_id', userId)
-      .maybeSingle()
-
-    let { data: membership, error } = await membershipQuery()
-
-    if (error) {
-      console.error('[loadEmpresa] erro membership (tentativa 1):', error.code)
-      await new Promise(r => setTimeout(r, 3000))
-      ;({ data: membership, error } = await membershipQuery())
-      if (error) {
-        console.error('[loadEmpresa] erro membership (tentativa 2):', error.code)
-        setEmpresa(null); setRole(null)
-        return // DB indisponível — não redireciona para /setup
+  // Busca empresa via API server-side (service_role — sem RLS, sem deps de env var no browser)
+  const loadEmpresa = async () => {
+    try {
+      const res = await fetch('/api/me')
+      if (!res.ok) {
+        console.error('[loadEmpresa] /api/me status:', res.status)
+        return // erro no servidor — não redireciona para /setup
       }
+      const { empresa: emp, role: r } = await res.json()
+      setEmpresa(emp ?? null)
+      setRole(r ?? null)
+      setEmpresaFetched(true)
+    } catch {
+      console.error('[loadEmpresa] erro de rede ao chamar /api/me')
+      // erro de rede — não redireciona para /setup
     }
-
-    if (!membership?.empresa_id) { setEmpresa(null); setRole(null); setEmpresaFetched(true); return }
-
-    setRole(membership.role as Role)
-
-    const { data: emp, error: empError } = await supabase
-      .from('empresas')
-      .select('id, nome')
-      .eq('id', membership.empresa_id)
-      .maybeSingle()
-
-    if (empError) {
-      console.error('[loadEmpresa] erro empresa:', empError.code, empError.message)
-      setEmpresa(null)
-      return // DB indisponível — não redireciona para /setup
-    }
-    if (emp) setEmpresa(emp as Empresa)
-    else setEmpresa(null)
-    setEmpresaFetched(true)
   }
 
   useEffect(() => {
-    // failsafe: libera a tela de loading após 8s (não afeta o redirect para /setup)
     const failsafe = setTimeout(() => setLoading(false), 8000)
 
     supabase.auth.getSession().then(async ({ data: { session } }: { data: { session: Session | null } }) => {
       setUser(session?.user ?? null)
       if (session?.user) {
-        try { await loadEmpresa(session.user.id) } catch { setEmpresa(null); setRole(null); setEmpresaFetched(true) }
+        await loadEmpresa()
       } else {
         setEmpresaFetched(true)
       }
@@ -99,18 +74,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event: AuthChangeEvent, session: Session | null) => {
-        // INITIAL_SESSION is handled by getSession() above
-        // TOKEN_REFRESHED only rotates the token — empresa is already loaded
         if (event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED') return
         setUser(session?.user ?? null)
         if (session?.user) {
-          try {
-            await loadEmpresa(session.user.id)
-          } catch {
-            setEmpresa(null)
-            setRole(null)
-            setEmpresaFetched(true)
-          }
+          await loadEmpresa()
         } else {
           setEmpresa(null)
           setRole(null)
@@ -122,8 +89,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => { subscription.unsubscribe(); clearTimeout(failsafe) }
   }, [])
 
-  // Só redireciona para /setup quando loadEmpresa confirmou que não há empresa
-  // (empresaFetched=true). O failsafe de loading não deve disparar o redirect.
+  // Redireciona para /setup apenas quando confirmado que não há empresa
   useEffect(() => {
     if (!loading && empresaFetched && user && !empresa && pathname !== '/setup') {
       router.replace('/setup')
