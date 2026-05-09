@@ -64,5 +64,13 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: errVinculo.message }, { status: 500 })
   }
 
+  // Cria linha de quota de storage padrão (plano free, 1 GB)
+  await admin.from('storage_quotas').insert({
+    empresa_id: empresa.id,
+    storage_usado_bytes: 0,
+    storage_limite_bytes: 1 * 1024 * 1024 * 1024,
+    plano: 'free',
+  })
+
   return NextResponse.json({ success: true })
 }

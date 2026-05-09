@@ -182,17 +182,33 @@ export async function deletarApontamento(
 
 // ─── Storage/Quota ───────────────────────────────────────────────────────────
 
+const QUOTA_DEFAULT_BYTES = 1 * 1024 * 1024 * 1024 // 1 GB (plano free)
+
 export async function getStorageQuota(
   supabase: SupabaseClient,
   empresaId: string
 ): Promise<StorageQuota> {
   const { data, error } = await supabase
-    .from('storage_quota_empresas')
+    .from('storage_quotas')
     .select('id,empresa_id,storage_usado_bytes,storage_limite_bytes,plano,created_at,updated_at')
     .eq('empresa_id', empresaId)
-    .single()
+    .maybeSingle()
 
-  if (error) throw new Error(error.message)
+  if (error && error.code !== 'PGRST116') throw new Error(error.message)
+
+  if (!data) {
+    // Empresa ainda sem linha de quota — retorna default sem bloquear o upload
+    return {
+      id: '',
+      empresa_id: empresaId,
+      storage_usado_bytes: 0,
+      storage_limite_bytes: QUOTA_DEFAULT_BYTES,
+      plano: 'free',
+      percentual_usado: 0,
+      created_at: '',
+      updated_at: '',
+    }
+  }
 
   const quota = data as StorageQuota
   quota.percentual_usado = Math.round((quota.storage_usado_bytes / quota.storage_limite_bytes) * 100)
@@ -223,7 +239,7 @@ export async function atualizarStorageUsado(
     const quota = await getStorageQuota(supabase, empresaId)
     const novoValor = Math.max(0, quota.storage_usado_bytes + bytesDelta)
     const { error: e2 } = await supabase
-      .from('storage_quota_empresas')
+      .from('storage_quotas')
       .update({ storage_usado_bytes: novoValor })
       .eq('empresa_id', empresaId)
     if (e2) throw new Error(e2.message)
