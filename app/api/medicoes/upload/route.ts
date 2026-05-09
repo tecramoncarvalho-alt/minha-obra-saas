@@ -34,6 +34,7 @@ export async function POST(request: NextRequest) {
   const atividadeIdStr = formData.get('atividade_id') as string | null
   const dataMedicao = (formData.get('data_medicao') as string | null) ?? new Date().toISOString().slice(0, 10)
   const responsavel = formData.get('responsavel') as string | null
+  const apontamentoId = (formData.get('apontamento_id') as string | null) ?? null
 
   if (!arquivo || !atividadeIdStr) {
     return NextResponse.json({ error: 'arquivo e atividade_id são obrigatórios.' }, { status: 400 })
@@ -115,6 +116,7 @@ export async function POST(request: NextRequest) {
     .from('medicoes')
     .insert({
       atividade_id: atividadeId,
+      apontamento_id: apontamentoId,
       data_medicao: dataMedicao,
       foto_url: publicUrl,
       responsavel: responsavel ?? null,

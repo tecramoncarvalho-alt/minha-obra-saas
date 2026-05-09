@@ -9,6 +9,7 @@ import { useAuth } from '@/app/providers'
 import type { ApontamentoDiario, Medicao, StorageQuota, StatusAtividade } from '@/app/lib/types'
 import { ApontamentoDiarioSchema } from '@/app/lib/schemas'
 import UploadFoto from './components/UploadFoto'
+import { uploadFotoComRetry } from '@/app/lib/upload-helper'
 
 interface Obra { id: number; nome: string }
 interface Atividade {
@@ -95,6 +96,12 @@ export default function ApontamentosPage() {
   const [mensagens, setMensagens] = useState<Record<number, { tipo: 'sucesso' | 'erro'; texto: string }>>({})
   const [expandido, setExpandido] = useState<Record<string, boolean>>({})
   const [errors, setErrors] = useState<Record<number, Record<string, string>>>({})
+
+  const [arquivosPendentes, setArquivosPendentes] = useState<Record<number, File | null>>({})
+  const [uploadStatus, setUploadStatus] = useState<Record<number, 'idle' | 'enviando' | 'sucesso' | 'erro'>>({})
+  const [uploadProgresso, setUploadProgresso] = useState<Record<number, number>>({})
+  const [uploadErroMsg, setUploadErroMsg] = useState<Record<number, string>>({})
+  const [fotoUrls, setFotoUrls] = useState<Record<number, string>>({})
 
   const fetchDados = useCallback(async () => {
     if (!empresa) return
@@ -234,6 +241,30 @@ export default function ApontamentosPage() {
         if (idx >= 0) { const n = [...prev]; n[idx] = apontamento; return n }
         return [...prev, apontamento]
       })
+
+      // Upload da foto pendente vinculada ao apontamento recém salvo
+      const arquivo = arquivosPendentes[atividadeId]
+      if (arquivo && empresa) {
+        setUploadStatus(prev => ({ ...prev, [atividadeId]: 'enviando' }))
+        setUploadProgresso(prev => ({ ...prev, [atividadeId]: 0 }))
+        try {
+          const result = await uploadFotoComRetry({
+            file: arquivo,
+            empresaId: empresa.id,
+            atividadeId,
+            apontamentoId: apontamento.id,
+            onProgress: (p) => setUploadProgresso(prev => ({ ...prev, [atividadeId]: p })),
+          })
+          setUploadStatus(prev => ({ ...prev, [atividadeId]: 'sucesso' }))
+          setFotoUrls(prev => ({ ...prev, [atividadeId]: result.foto_url }))
+          setArquivosPendentes(prev => ({ ...prev, [atividadeId]: null }))
+          void fetchQuota()
+        } catch (err) {
+          setUploadStatus(prev => ({ ...prev, [atividadeId]: 'erro' }))
+          setUploadErroMsg(prev => ({ ...prev, [atividadeId]: err instanceof Error ? err.message : 'Erro no upload.' }))
+        }
+      }
+
       setMensagens(prev => ({ ...prev, [atividadeId]: { tipo: 'sucesso', texto: 'Apontamento salvo!' } }))
       setTimeout(() => {
         setMensagens(prev => {
@@ -479,11 +510,18 @@ export default function ApontamentosPage() {
                           <div>
                             <label className="block text-xs font-medium text-gray-600 mb-1">Foto de medição (opcional)</label>
                             <UploadFoto
-                              empresaId={empresa.id}
-                              obraId={obraId}
-                              atividadeId={at.id}
-                              onUploadSucesso={() => { void fetchQuota() }}
-                              onUploadErro={(msg) => setMensagens(prev => ({ ...prev, [at.id]: { tipo: 'erro', texto: msg } }))}
+                              onFileSelecionado={(file) => {
+                                setArquivosPendentes(prev => ({ ...prev, [at.id]: file }))
+                                if (!file) {
+                                  setUploadStatus(prev => ({ ...prev, [at.id]: 'idle' }))
+                                  setUploadErroMsg(prev => ({ ...prev, [at.id]: '' }))
+                                  setFotoUrls(prev => { const n = { ...prev }; delete n[at.id]; return n })
+                                }
+                              }}
+                              uploadStatus={uploadStatus[at.id] ?? 'idle'}
+                              uploadProgresso={uploadProgresso[at.id] ?? 0}
+                              uploadErroMsg={uploadErroMsg[at.id] ?? ''}
+                              fotoUrl={fotoUrls[at.id]}
                             />
                           </div>
                         )}

@@ -4,6 +4,7 @@ export interface UploadOptions {
   file: File
   empresaId: string
   atividadeId: number
+  apontamentoId?: string
   onProgress: (percentual: number) => void
   onRetry?: (tentativa: number, maxRetries: number) => void
   maxRetries?: number
@@ -19,6 +20,7 @@ export async function uploadFotoComRetry({
   file,
   empresaId,
   atividadeId,
+  apontamentoId,
   onProgress,
   onRetry,
   maxRetries = 3,
@@ -57,6 +59,7 @@ export async function uploadFotoComRetry({
   formData.append('arquivo', comprimido, file.name)
   formData.append('atividade_id', String(atividadeId))
   formData.append('data_medicao', new Date().toISOString().slice(0, 10))
+  if (apontamentoId) formData.append('apontamento_id', apontamentoId)
 
   let ultimoErro = new Error('Falha no upload.')
 
