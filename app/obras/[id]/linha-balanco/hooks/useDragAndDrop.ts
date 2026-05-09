@@ -39,7 +39,7 @@ interface Params {
   domingoUtil: boolean;
   calcDataFimUtil: (inicio: Date, duracaoDias: number) => Date;
   propagarVinculoLocal: (vinculoId: string, atOrigemId: number, deltaDias: number) => void;
-  propagarDependenciasLocal: (atMovidaId: number, novoFim: string, deps: Dependencia[]) => void;
+  propagarDependenciasLocal: (atMovidaId: number, novoFim: string, deps: Dependencia[], vinculoId?: string | null) => void;
   atualizarAtividadeLocal: (atId: number, campos: Partial<Atividade>) => void;
   atualizarSnapshotVersaoAtiva: (pavs: PavComAtiv[]) => Promise<void>;
   setMensagem: (m: { tipo: 'success' | 'error'; texto: string } | null) => void;
@@ -100,28 +100,50 @@ export function useDragAndDrop({
   const propagarVinculoCruzadoAsync = useCallback(async (
     atMovidaId: number,
     novoFim: string,
+    vinculoId: string | null,
   ) => {
-    const deps = dependencias.filter(d => d.predecessora_id === atMovidaId);
-    for (const dep of deps) {
-      const newFimDate = parseDate(novoFim);
-      const lag = dep.lag_dias ?? 0;
-      const newInicio = addDiasUteisLocal(newFimDate, 1 + lag, feriadosSet, sabadoUtil, domingoUtil);
+    const movidasComFim: { id: number; fim: string }[] = [];
 
-      const { data: sucData } = await supabase.from('atividades')
-        .select('*').eq('id', dep.sucessora_id).single();
-      if (!sucData) continue;
-      const durUtil = sucData.duracao_dias ?? 1;
-      const newFimSuc = calcDataFimUtil(newInicio, durUtil);
+    if (vinculoId) {
+      // propagarVinculo já gravou datas atualizadas no banco — buscar de lá
+      const { data: cadeia } = await supabase.from('atividades')
+        .select('id, data_fim, vinculo_ordem')
+        .eq('vinculo_id', vinculoId)
+        .order('vinculo_ordem');
+      if (cadeia) {
+        const atOrigem = cadeia.find((a: { id: number; vinculo_ordem: number }) => a.id === atMovidaId);
+        const ordemOrigem = atOrigem?.vinculo_ordem ?? 0;
+        cadeia
+          .filter((a: { id: number; vinculo_ordem: number; data_fim: string }) => (a.vinculo_ordem ?? 0) >= ordemOrigem)
+          .forEach((at: { id: number; data_fim: string }) => movidasComFim.push({ id: at.id, fim: at.data_fim }));
+      }
+    } else {
+      movidasComFim.push({ id: atMovidaId, fim: novoFim });
+    }
 
-      await supabase.from('atividades').update({
-        data_inicio: toStr(newInicio), data_fim: toStr(newFimSuc),
-      }).eq('id', dep.sucessora_id);
+    for (const movida of movidasComFim) {
+      const deps = dependencias.filter(d => d.predecessora_id === movida.id);
+      for (const dep of deps) {
+        const newFimDate = parseDate(movida.fim);
+        const lag = dep.lag_dias ?? 0;
+        const newInicio = addDiasUteisLocal(newFimDate, 1 + lag, feriadosSet, sabadoUtil, domingoUtil);
 
-      if (sucData.vinculo_id) {
-        await propagarVinculo(
-          { ...sucData, data_inicio: toStr(newInicio), data_fim: toStr(newFimSuc) } as Atividade,
-          0, sucData.linha_index ?? 0, newInicio, newFimSuc,
-        );
+        const { data: sucData } = await supabase.from('atividades')
+          .select('*').eq('id', dep.sucessora_id).single();
+        if (!sucData) continue;
+        const durUtil = sucData.duracao_dias ?? 1;
+        const newFimSuc = calcDataFimUtil(newInicio, durUtil);
+
+        await supabase.from('atividades').update({
+          data_inicio: toStr(newInicio), data_fim: toStr(newFimSuc),
+        }).eq('id', dep.sucessora_id);
+
+        if (sucData.vinculo_id) {
+          await propagarVinculo(
+            { ...sucData, data_inicio: toStr(newInicio), data_fim: toStr(newFimSuc) } as Atividade,
+            0, sucData.linha_index ?? 0, newInicio, newFimSuc,
+          );
+        }
       }
     }
   }, [dependencias, feriadosSet, sabadoUtil, domingoUtil, calcDataFimUtil, supabase, propagarVinculo]);
@@ -187,9 +209,9 @@ export function useDragAndDrop({
         }).eq('id', drag.at.id);
       }
 
-      // Propagar dependências cruzadas
-      propagarDependenciasLocal(drag.at.id, toStr(novoFim), dependencias);
-      await propagarVinculoCruzadoAsync(drag.at.id, toStr(novoFim));
+      // Propagar dependências cruzadas (chain-aware: todos os membros da cadeia que moveram)
+      propagarDependenciasLocal(drag.at.id, toStr(novoFim), dependencias, drag.at.vinculo_id ?? null);
+      await propagarVinculoCruzadoAsync(drag.at.id, toStr(novoFim), drag.at.vinculo_id ?? null);
 
       const pavAtualizados = pavimentos.map(pav => ({
         ...pav,

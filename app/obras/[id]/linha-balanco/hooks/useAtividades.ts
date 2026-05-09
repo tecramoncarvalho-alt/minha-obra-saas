@@ -115,48 +115,65 @@ export function useAtividades(
     atMovidaId: number,
     novoFim: string,
     dependencias: Dependencia[],
+    vinculoId?: string | null,
   ) => {
-    const deps = dependencias.filter(d => d.predecessora_id === atMovidaId);
-    if (deps.length === 0) return;
-
     setPavimentos(prev => {
       const { feriadosSet: fs, sabadoUtil: su, domingoUtil: du } = calendarioRef.current;
       const novasDatas: Record<number, { inicio: string; fim: string }> = {};
 
-      for (const dep of deps) {
-        let sucAt: Atividade | undefined;
-        for (const pav of prev) {
-          const found = pav.atividades.find(a => a.id === dep.sucessora_id);
-          if (found) { sucAt = found; break; }
-        }
-        if (!sucAt) continue;
+      // Coletar todas as atividades que moveram (prev já tem datas atualizadas de propagarVinculoLocal)
+      const movidasComFim: { id: number; fim: string }[] = [];
+      if (vinculoId) {
+        const atOrigem = prev.flatMap(p => p.atividades).find(a => a.id === atMovidaId);
+        const ordemOrigem = atOrigem?.vinculo_ordem ?? 0;
+        prev.forEach(pav => pav.atividades.forEach(at => {
+          if (at.vinculo_id === vinculoId && (at.vinculo_ordem ?? 0) >= ordemOrigem)
+            movidasComFim.push({ id: at.id, fim: at.data_fim });
+        }));
+      } else {
+        movidasComFim.push({ id: atMovidaId, fim: novoFim });
+      }
 
-        const newFimDate = parseDate(novoFim);
-        const lag = dep.lag_dias ?? 0;
-        const newInicio = addDiasUteisLocal(newFimDate, 1 + lag, fs, su, du);
-        const durUtil = sucAt.duracao_dias ?? 1;
-        const newFimSuc = calcDataFimUtil(newInicio, durUtil);
-        novasDatas[sucAt.id] = { inicio: toStr(newInicio), fim: toStr(newFimSuc) };
+      if (movidasComFim.length === 0) return prev;
 
-        if (sucAt.vinculo_id) {
-          const cadeia: Atividade[] = [];
-          prev.forEach(pav => pav.atividades.forEach(at => {
-            if (at.vinculo_id === (sucAt as Atividade).vinculo_id) cadeia.push(at);
-          }));
-          cadeia.sort((a, b) => (a.vinculo_ordem ?? 0) - (b.vinculo_ordem ?? 0));
-          const idxSuc = cadeia.findIndex(a => a.id === (sucAt as Atividade).id);
-          let refFim = newFimSuc;
-          for (let i = idxSuc + 1; i < cadeia.length; i++) {
-            const at = cadeia[i];
-            const lag2 = at.vinculo_lag ?? 0;
-            const ni = addDiasUteisLocal(refFim, 1 + lag2, fs, su, du);
-            const nf = calcDataFimUtil(ni, at.duracao_dias ?? 1);
-            novasDatas[at.id] = { inicio: toStr(ni), fim: toStr(nf) };
-            refFim = nf;
+      for (const movida of movidasComFim) {
+        const depsDeEsta = dependencias.filter(d => d.predecessora_id === movida.id);
+        for (const dep of depsDeEsta) {
+          let sucAt: Atividade | undefined;
+          for (const pav of prev) {
+            const found = pav.atividades.find(a => a.id === dep.sucessora_id);
+            if (found) { sucAt = found; break; }
+          }
+          if (!sucAt) continue;
+
+          const newFimDate = parseDate(movida.fim);
+          const lag = dep.lag_dias ?? 0;
+          const newInicio = addDiasUteisLocal(newFimDate, 1 + lag, fs, su, du);
+          const durUtil = sucAt.duracao_dias ?? 1;
+          const newFimSuc = calcDataFimUtil(newInicio, durUtil);
+          novasDatas[sucAt.id] = { inicio: toStr(newInicio), fim: toStr(newFimSuc) };
+
+          if (sucAt.vinculo_id) {
+            const cadeia: Atividade[] = [];
+            prev.forEach(pav => pav.atividades.forEach(at => {
+              if (at.vinculo_id === (sucAt as Atividade).vinculo_id) cadeia.push(at);
+            }));
+            cadeia.sort((a, b) => (a.vinculo_ordem ?? 0) - (b.vinculo_ordem ?? 0));
+            const idxSuc = cadeia.findIndex(a => a.id === (sucAt as Atividade).id);
+            let refFim = newFimSuc;
+            for (let i = idxSuc + 1; i < cadeia.length; i++) {
+              const at = cadeia[i];
+              const lag2 = at.vinculo_lag ?? 0;
+              const ni = addDiasUteisLocal(refFim, 1 + lag2, fs, su, du);
+              const nf = calcDataFimUtil(ni, at.duracao_dias ?? 1);
+              novasDatas[at.id] = { inicio: toStr(ni), fim: toStr(nf) };
+              refFim = nf;
+            }
           }
         }
       }
 
+      if (Object.keys(novasDatas).length === 0) return prev;
       return prev.map(pav => ({
         ...pav,
         atividades: pav.atividades.map(at =>
