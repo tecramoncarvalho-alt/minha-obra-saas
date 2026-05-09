@@ -166,20 +166,19 @@ export default function ApontamentosPage() {
         .order('data', { ascending: false })
         .limit(20)
 
-      const apIds = (hist ?? []).map((ap: { id: string }) => ap.id)
-      const { data: todasMed } = apIds.length > 0
-        ? await supabase
-            .from('medicoes')
-            .select('id,apontamento_id,foto_url,data_medicao,responsavel')
-            .in('apontamento_id', apIds)
-        : { data: [] as Medicao[] }
+      // Busca medições pelo atividade_id + intervalo de datas (uploads sem apontamento_id incluídos)
+      const { data: todasMed } = await supabase
+        .from('medicoes')
+        .select('id,atividade_id,apontamento_id,foto_url,data_medicao,responsavel')
+        .in('atividade_id', atividadeIds)
+        .gte('data_medicao', dataInicio)
+        .lte('data_medicao', hoje())
 
-      const medPorApontamento: Record<string, Medicao[]> = {}
+      const medPorAtividadeData: Record<string, Medicao[]> = {}
       for (const m of (todasMed ?? []) as Medicao[]) {
-        if (m.apontamento_id) {
-          if (!medPorApontamento[m.apontamento_id]) medPorApontamento[m.apontamento_id] = []
-          medPorApontamento[m.apontamento_id].push(m)
-        }
+        const key = `${m.atividade_id}|${m.data_medicao}`
+        if (!medPorAtividadeData[key]) medPorAtividadeData[key] = []
+        medPorAtividadeData[key].push(m)
       }
 
       const rows: HistoricoRow[] = (hist ?? []).map((ap: ApontamentoDiario) => {
@@ -191,7 +190,7 @@ export default function ApontamentosPage() {
           efetivo_real: ap.efetivo_real,
           percentual_executado: ap.percentual_executado,
           observacao: ap.observacao,
-          medicoes: medPorApontamento[ap.id] ?? [],
+          medicoes: medPorAtividadeData[`${ap.atividade_id}|${ap.data}`] ?? [],
         }
       })
       setHistorico(rows)
@@ -203,6 +202,13 @@ export default function ApontamentosPage() {
 
     setCarregando(false)
   }, [obraId, empresa])
+
+  // Atualiza só a barra de quota sem recarregar a página inteira
+  const fetchQuota = useCallback(async () => {
+    if (!empresa) return
+    const res = await fetch(`/api/empresa/${empresa.id}/storage-quota`)
+    if (res.ok) setQuota(await res.json())
+  }, [empresa])
 
   useEffect(() => {
     if (!authLoading && empresa) fetchDados()
@@ -476,7 +482,7 @@ export default function ApontamentosPage() {
                               empresaId={empresa.id}
                               obraId={obraId}
                               atividadeId={at.id}
-                              onUploadSucesso={() => fetchDados()}
+                              onUploadSucesso={() => { void fetchQuota() }}
                               onUploadErro={(msg) => setMensagens(prev => ({ ...prev, [at.id]: { tipo: 'erro', texto: msg } }))}
                             />
                           </div>
