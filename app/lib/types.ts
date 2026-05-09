@@ -30,6 +30,7 @@ export interface Atividade {
   linha_index: number;
   vinculo_id: string | null;
   vinculo_ordem: number | null;
+  vinculo_lag?: number | null;   // dias úteis de intervalo antes de iniciar; negativo = overlap
   subatividades?: Subatividade[];
 }
 

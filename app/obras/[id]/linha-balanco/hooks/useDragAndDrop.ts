@@ -83,7 +83,8 @@ export function useDragAndDrop({
       if ((item.vinculo_ordem ?? 0) <= (atOrigem.vinculo_ordem ?? 0)) continue;
 
       const durUtil = item.duracao_dias ?? (diffDias(parseDate(item.data_inicio), parseDate(item.data_fim)) + 1);
-      const novaData = addDiasUteisLocal(refFim, 1, feriadosSet, sabadoUtil, domingoUtil);
+      const lag = (item.vinculo_lag ?? 0);
+      const novaData = addDiasUteisLocal(refFim, 1 + lag, feriadosSet, sabadoUtil, domingoUtil);
       const novaDataFim = calcDataFimUtil(novaData, durUtil);
 
       await supabase.from('atividades').update({

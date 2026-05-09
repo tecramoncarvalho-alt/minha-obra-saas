@@ -4,7 +4,7 @@ import { getCorSub, calcDuracaoTotal } from '../../utils/geradorCores';
 import { fmtDate, gerarUUID } from '../../utils/helpers';
 
 type SubEditarForm = { id: string; dbId?: number; nome: string; duracao: string; equipe: string; efetivo: string };
-type FormEditar = { nome: string; dataInicio: string; dataFim: string; equipe: string; efetivo: string };
+type FormEditar = { nome: string; dataInicio: string; dataFim: string; equipe: string; efetivo: string; vinculo_lag: number };
 
 interface Props {
   modalEditar: { at: Atividade; pav: PavComAtiv };
@@ -150,6 +150,20 @@ export function ModalEditarAtividade({
                   ✂️ Quebrar
                 </button>
               </div>
+              {(modalEditar.at.vinculo_ordem ?? 0) > 0 && (
+                <div className="mt-2 flex items-center gap-2">
+                  <label className="text-xs text-purple-700 font-semibold whitespace-nowrap">⏱️ Intervalo (dias úteis):</label>
+                  <input
+                    type="number"
+                    value={formEditar.vinculo_lag ?? 0}
+                    onChange={e => setFormEditar(prev => ({ ...prev, vinculo_lag: parseInt(e.target.value) || 0 }))}
+                    className="w-20 px-2 py-1 border border-purple-300 rounded text-sm text-center"
+                  />
+                  <span className="text-xs text-purple-500">
+                    {(formEditar.vinculo_lag ?? 0) < 0 ? 'sobreposição' : 'folga'}
+                  </span>
+                </div>
+              )}
             </div>
           ) : (
             <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">

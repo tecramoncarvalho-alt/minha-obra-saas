@@ -93,7 +93,8 @@ export function useAtividades(
           novasDatas[at.id] = { inicio: toStr(ni), fim: toStr(calcDataFimUtil(ni, durUtil)) };
         } else {
           const antFim = parseDate(novasDatas[cadeia[i - 1].id].fim);
-          const ni = addDiasUteisLocal(antFim, 1, fs, su, du);
+          const lag = cadeia[i].vinculo_lag ?? 0;
+          const ni = addDiasUteisLocal(antFim, 1 + lag, fs, su, du);
           novasDatas[at.id] = { inicio: toStr(ni), fim: toStr(calcDataFimUtil(ni, durUtil)) };
         }
       }

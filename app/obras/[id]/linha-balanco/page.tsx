@@ -240,7 +240,7 @@ export default function LinhaDeBalanco() {
 
   // Modal de edição
   const [modalEditar, setModalEditar] = useState<{at: Atividade; pav: PavComAtiv} | null>(null);
-  const [formEditar, setFormEditar] = useState({ nome: '', dataInicio: '', dataFim: '', equipe: '', efetivo: '' });
+  const [formEditar, setFormEditar] = useState({ nome: '', dataInicio: '', dataFim: '', equipe: '', efetivo: '', vinculo_lag: 0 });
   const [subsEditar, setSubsEditar] = useState<{id:string;dbId?:number;nome:string;duracao:string;equipe:string;efetivo:string}[]>([]);
   const [salvandoEdicao, setSalvandoEdicao] = useState(false);
 
@@ -331,7 +331,7 @@ export default function LinhaDeBalanco() {
 
       const { data: todasAtivs } = await supabase
         .from('atividades')
-        .select('id,nome,data_inicio,data_fim,duracao_dias,equipe,efetivo,linha_index,vinculo_id,vinculo_ordem,pavimento_id')
+        .select('id,nome,data_inicio,data_fim,duracao_dias,equipe,efetivo,linha_index,vinculo_id,vinculo_ordem,vinculo_lag,pavimento_id')
         .in('pavimento_id', pavIds)
         .order('data_inicio');
 
@@ -367,6 +367,7 @@ export default function LinhaDeBalanco() {
             linha_index: a.linha_index ?? 0,
             vinculo_id: a.vinculo_id ?? null,
             vinculo_ordem: a.vinculo_ordem ?? null,
+            vinculo_lag: (a as Atividade & { vinculo_lag?: number | null }).vinculo_lag ?? 0,
             subatividades: (subsPorAtividade[a.id] ?? []).map((s: Subatividade, i: number) => ({
               ...s,
               cor: getCorSub(a.nome, i),
@@ -805,7 +806,7 @@ export default function LinhaDeBalanco() {
     if (!ctxMenu?.at || !ctxMenu.pav) return;
     const at = ctxMenu.at;
     setModalEditar({ at, pav: ctxMenu.pav });
-    setFormEditar({ nome: at.nome, dataInicio: at.data_inicio, dataFim: at.data_fim, equipe: at.equipe || '', efetivo: at.efetivo ? String(at.efetivo) : '' });
+    setFormEditar({ nome: at.nome, dataInicio: at.data_inicio, dataFim: at.data_fim, equipe: at.equipe || '', efetivo: at.efetivo ? String(at.efetivo) : '', vinculo_lag: at.vinculo_lag ?? 0 });
     setSubsEditar((at.subatividades || []).map(s => ({
       id: String(s.id), dbId: s.id,
       nome: s.nome, duracao: String(s.duracao),
@@ -855,6 +856,7 @@ export default function LinhaDeBalanco() {
       duracao_dias: duracao,
       equipe: formEditar.equipe || null,
       efetivo: (subsEditar.length === 0 && formEditar.efetivo) ? parseInt(formEditar.efetivo) : null,
+      vinculo_lag: formEditar.vinculo_lag ?? 0,
     }).eq('id', modalEditar.at.id);
 
     // Gerenciar subatividades
@@ -902,6 +904,7 @@ export default function LinhaDeBalanco() {
       duracao_dias: duracao,
       equipe: formEditar.equipe || null,
       efetivo: (subsEditar.length === 0 && formEditar.efetivo) ? parseInt(formEditar.efetivo) : null,
+      vinculo_lag: formEditar.vinculo_lag ?? 0,
       subatividades: subsAtualizadas.map((s, i) => ({ ...s, cor: getCorSub(formEditar.nome, i) })),
     };
     atualizarAtividadeLocal(modalEditar.at.id, efeitoLocal);
@@ -990,10 +993,10 @@ export default function LinhaDeBalanco() {
   // ─── Quebrar vínculo ───
   const handleQuebrarVinculo = async () => {
     if (!modalEditar?.at.vinculo_id) return;
-    await supabase.from('atividades').update({ vinculo_id: null, vinculo_ordem: null }).eq('id', modalEditar.at.id);
+    await supabase.from('atividades').update({ vinculo_id: null, vinculo_ordem: null, vinculo_lag: null }).eq('id', modalEditar.at.id);
     // Atualizar local
-    atualizarAtividadeLocal(modalEditar.at.id, { vinculo_id: null, vinculo_ordem: null });
-    setModalEditar(prev => prev ? { ...prev, at: { ...prev.at, vinculo_id: null, vinculo_ordem: null } } : null);
+    atualizarAtividadeLocal(modalEditar.at.id, { vinculo_id: null, vinculo_ordem: null, vinculo_lag: null });
+    setModalEditar(prev => prev ? { ...prev, at: { ...prev.at, vinculo_id: null, vinculo_ordem: null, vinculo_lag: null } } : null);
     setMensagem({ tipo: 'success', texto: '✅ Vínculo quebrado!' });
     setTimeout(() => setMensagem(null), 3000);
   };
@@ -1001,7 +1004,7 @@ export default function LinhaDeBalanco() {
   // ─── Reativar vínculo ───
   const [modalVincular, setModalVincular] = useState<{at: Atividade} | null>(null);
 
-  const handleReativarVinculo = async (atAlvo: Atividade) => {
+  const handleReativarVinculo = async (atAlvo: Atividade, comoAntecessora = false) => {
     if (!modalEditar) return;
     const atOrigem = modalEditar.at; // atividade que está sendo vinculada
 
@@ -1016,24 +1019,25 @@ export default function LinhaDeBalanco() {
         .sort((a, b) => (a.vinculo_ordem ?? 0) - (b.vinculo_ordem ?? 0))
       : [atOrigem];
 
-    // ─── Caso: atAlvo tem cadeia → inserir cadeiaOrigem no final da cadeiaAlvo ───
-    // Determinar posição de inserção: após atAlvo na cadeia
+    // Determinar posição de inserção na cadeia-alvo
     const idxAlvoNaCadeia = cadeiaAlvo.findIndex(a => a.id === atAlvo.id);
-    const cadeiaAntes = cadeiaAlvo.slice(0, idxAlvoNaCadeia + 1); // itens até atAlvo (inclusive)
-    const cadeiaDepois = cadeiaAlvo.slice(idxAlvoNaCadeia + 1);   // itens após atAlvo
 
-    // Nova cadeia: [antes...] + [cadeiaOrigem...] + [depois...]
-    const novaCadeia = [...cadeiaAntes, ...cadeiaOrigem, ...cadeiaDepois];
+    // comoAntecessora: inserir cadeiaOrigem ANTES de atAlvo
+    // comoSucessora (padrão): inserir cadeiaOrigem APÓS atAlvo
+    const novaCadeia = comoAntecessora
+      ? [...cadeiaAlvo.slice(0, idxAlvoNaCadeia), ...cadeiaOrigem, ...cadeiaAlvo.slice(idxAlvoNaCadeia)]
+      : [...cadeiaAlvo.slice(0, idxAlvoNaCadeia + 1), ...cadeiaOrigem, ...cadeiaAlvo.slice(idxAlvoNaCadeia + 1)];
 
     // Usar o vinculo_id da cadeiaAlvo (ou criar novo se nenhuma tem)
     const vinculoId = atAlvo.vinculo_id || atOrigem.vinculo_id || gerarUUID();
 
     // Salvar nova ordem no banco
     for (let i = 0; i < novaCadeia.length; i++) {
+      const lagAkt = novaCadeia[i].vinculo_lag ?? 0;
       await supabase.from('atividades')
-        .update({ vinculo_id: vinculoId, vinculo_ordem: i })
+        .update({ vinculo_id: vinculoId, vinculo_ordem: i, vinculo_lag: lagAkt })
         .eq('id', novaCadeia[i].id);
-      atualizarAtividadeLocal(novaCadeia[i].id, { vinculo_id: vinculoId, vinculo_ordem: i });
+      atualizarAtividadeLocal(novaCadeia[i].id, { vinculo_id: vinculoId, vinculo_ordem: i, vinculo_lag: lagAkt });
     }
 
     setModalVincular(null);
