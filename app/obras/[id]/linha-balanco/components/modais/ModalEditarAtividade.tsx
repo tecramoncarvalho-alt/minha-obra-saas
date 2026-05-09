@@ -24,6 +24,7 @@ interface Props {
   pavimentosExibidos: PavComAtiv[];
   handleRemoverDependencia: (depId: string) => Promise<void>;
   setModalAdicionarDep: (v: { at: Atividade } | null) => void;
+
 }
 
 export function ModalEditarAtividade({

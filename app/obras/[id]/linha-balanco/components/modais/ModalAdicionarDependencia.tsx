@@ -6,7 +6,7 @@ interface Props {
   modalAdicionarDep: { at: Atividade };
   pavimentosExibidos: PavComAtiv[];
   dependencias: Dependencia[];
-  onConfirmar: (predecessoraId: number, lag: number) => void;
+  onConfirmar: (predecessoraId: number, lag: number) => Promise<void>;
   onCancelar: () => void;
 }
 
@@ -14,15 +14,12 @@ export function ModalAdicionarDependencia({
   modalAdicionarDep, pavimentosExibidos, dependencias, onConfirmar, onCancelar,
 }: Props) {
   const [lagInput, setLagInput] = useState(0);
+  const [salvando, setSalvando] = useState(false);
   const at = modalAdicionarDep.at;
 
-  // IDs já conectados como predecessores desta atividade
   const predsExistentes = new Set(
     dependencias.filter(d => d.sucessora_id === at.id).map(d => d.predecessora_id)
   );
-
-  // Candidatas: atividade diferente, cadeia diferente (ou sem cadeia), sem criar ciclo direto
-  // Ciclo direto: at não pode depender de algo que já depende de at
   const sucsDiretas = new Set(
     dependencias.filter(d => d.predecessora_id === at.id).map(d => d.sucessora_id)
   );
@@ -37,6 +34,13 @@ export function ModalAdicionarDependencia({
       )
       .map(a => ({ at: a, pav }))
   );
+
+  const handleClick = async (candId: number) => {
+    if (salvando) return;
+    setSalvando(true);
+    await onConfirmar(candId, lagInput);
+    setSalvando(false);
+  };
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
@@ -53,6 +57,7 @@ export function ModalAdicionarDependencia({
             type="number"
             value={lagInput}
             onChange={e => setLagInput(parseInt(e.target.value) || 0)}
+            disabled={salvando}
             className="w-20 px-2 py-1 border border-amber-300 rounded text-sm text-center outline-none focus:ring-1 focus:ring-amber-400"
           />
           <span className="text-xs text-amber-600">
@@ -68,9 +73,11 @@ export function ModalAdicionarDependencia({
           )}
           {candidatas.map(({ at: cand, pav }) => (
             <button
+              type="button"
               key={cand.id}
-              onClick={() => onConfirmar(cand.id, lagInput)}
-              className="w-full text-left p-3 border border-slate-200 rounded-lg hover:bg-amber-50 hover:border-amber-300 transition-colors"
+              disabled={salvando}
+              onClick={() => handleClick(cand.id)}
+              className="w-full text-left p-3 border border-slate-200 rounded-lg hover:bg-amber-50 hover:border-amber-300 transition-colors disabled:opacity-50 disabled:cursor-wait"
             >
               <div className="flex items-center justify-between">
                 <div>
@@ -80,15 +87,19 @@ export function ModalAdicionarDependencia({
                     {cand.vinculo_id && <span className="ml-1 text-purple-500">🔗 em cadeia</span>}
                   </p>
                 </div>
-                <span className="text-xs text-amber-500 ml-2 flex-shrink-0">← predecessora</span>
+                <span className="text-xs text-amber-500 ml-2 flex-shrink-0">
+                  {salvando ? '⏳' : '← predecessora'}
+                </span>
               </div>
             </button>
           ))}
         </div>
 
         <button
+          type="button"
           onClick={onCancelar}
-          className="w-full mt-4 px-4 py-2 border border-slate-300 text-slate-700 rounded-lg font-semibold hover:bg-slate-50 flex-shrink-0"
+          disabled={salvando}
+          className="w-full mt-4 px-4 py-2 border border-slate-300 text-slate-700 rounded-lg font-semibold hover:bg-slate-50 flex-shrink-0 disabled:opacity-50"
         >
           Cancelar
         </button>

@@ -1068,10 +1068,17 @@ export default function LinhaDeBalanco() {
     const { data, error } = await supabase.from('dependencias')
       .insert({ predecessora_id: predecessoraId, sucessora_id: sucId, lag_dias: lag })
       .select().single();
-    if (!error && data) {
-      setDependencias(prev => [...prev, data as Dependencia]);
+    if (error) {
+      setMensagem({ tipo: 'error', texto: `❌ Erro ao salvar dependência: ${error.message}` });
+      setTimeout(() => setMensagem(null), 5000);
+      return;
     }
-    setModalAdicionarDep(null);
+    if (data) {
+      setDependencias(prev => [...prev, data as Dependencia]);
+      setModalAdicionarDep(null);
+      setMensagem({ tipo: 'success', texto: '✅ Dependência criada!' });
+      setTimeout(() => setMensagem(null), 3000);
+    }
   };
 
   const handleRemoverDependencia = async (depId: string) => {
