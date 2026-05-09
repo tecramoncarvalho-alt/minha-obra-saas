@@ -4,6 +4,8 @@ import { createContext, useContext, useEffect, useState, useMemo } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import type { User, AuthChangeEvent, Session } from '@supabase/supabase-js'
 import { createClient } from '@/lib/supabase/client'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { ReactQueryDevtools } from '@tanstack/react-query-devtools'
 
 interface Empresa {
   id: string
@@ -30,7 +32,21 @@ const AuthContext = createContext<AuthContextType>({
   empresaFetched: false,
 })
 
+function makeQueryClient() {
+  return new QueryClient({
+    defaultOptions: {
+      queries: {
+        staleTime: 5 * 60 * 1000,  // 5 min — dados considerados frescos
+        gcTime: 10 * 60 * 1000,    // 10 min — garbage collect após inatividade
+        retry: 1,
+        refetchOnWindowFocus: false,
+      },
+    },
+  })
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const [queryClient] = useState(makeQueryClient)
   const [user, setUser] = useState<User | null>(null)
   const [empresa, setEmpresa] = useState<Empresa | null>(null)
   const [role, setRole] = useState<Role | null>(null)
@@ -102,9 +118,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, empresa, role, signOut, loading, empresaFetched }}>
-      {children}
-    </AuthContext.Provider>
+    <QueryClientProvider client={queryClient}>
+      <AuthContext.Provider value={{ user, empresa, role, signOut, loading, empresaFetched }}>
+        {children}
+      </AuthContext.Provider>
+      {process.env.NODE_ENV === 'development' && <ReactQueryDevtools initialIsOpen={false} />}
+    </QueryClientProvider>
   )
 }
 

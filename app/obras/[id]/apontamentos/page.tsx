@@ -4,12 +4,14 @@ import { Fragment, useState, useEffect, useCallback } from 'react'
 import Image from 'next/image'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
+import { useQueryClient } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
 import { useAuth } from '@/app/providers'
-import type { ApontamentoDiario, Medicao, StorageQuota, StatusAtividade } from '@/app/lib/types'
+import type { ApontamentoDiario, Medicao, StatusAtividade } from '@/app/lib/types'
 import { ApontamentoDiarioSchema } from '@/app/lib/schemas'
 import UploadFoto from './components/UploadFoto'
 import { uploadFotoComRetry } from '@/app/lib/upload-helper'
+import { useStorageQuota, useApontamentosHoje } from '@/app/lib/query-hooks'
 
 interface Obra { id: number; nome: string }
 interface Atividade {
@@ -97,13 +99,18 @@ export default function ApontamentosPage() {
   const router = useRouter()
   const { empresa, role, loading: authLoading } = useAuth()
 
+  const queryClient = useQueryClient()
+
   const [obra, setObra] = useState<Obra | null>(null)
   const [atividades, setAtividades] = useState<Atividade[]>([])
   const [atividadesAtrasadas, setAtividadesAtrasadas] = useState<Atividade[]>([])
-  const [apontamentosHoje, setApontamentosHoje] = useState<ApontamentoDiario[]>([])
   const [historico, setHistorico] = useState<HistoricoRow[]>([])
-  const [quota, setQuota] = useState<StorageQuota | null>(null)
   const [carregando, setCarregando] = useState(true)
+
+  // React Query: cache 5 min, invalida após salvar/upload
+  const { data: apontamentosHoje = [], isSuccess: apontamentosCarregados } =
+    useApontamentosHoje(obraId, hoje(), !authLoading && !!empresa)
+  const { data: quota } = useStorageQuota(empresa?.id)
 
   const [expandidoCard, setExpandidoCard] = useState<number | null>(null)
   const [historicoAberto, setHistoricoAberto] = useState(false)
@@ -159,29 +166,6 @@ export default function ApontamentosPage() {
     const ativasHoje = allAtivs.filter(a => a.data_fim >= hoje())
     const candidatasAtrasadas = allAtivs.filter(a => a.data_fim < hoje())
     setAtividades(ativasHoje)
-
-    // Apontamentos de hoje (para ativas)
-    const resHoje = await fetch(`/api/obras/${obraId}/apontamentos?data=${hoje()}`)
-    if (resHoje.ok) {
-      const { apontamentos } = await resHoje.json()
-      setApontamentosHoje(apontamentos)
-      const porAtividade = Object.fromEntries((apontamentos as ApontamentoDiario[]).map(a => [a.atividade_id, a]))
-      setForms(prev => {
-        const next = { ...prev }
-        for (const at of ativasHoje) {
-          if (!next[at.id]) {
-            const ap = porAtividade[at.id]
-            next[at.id] = {
-              efetivo_real: ap?.efetivo_real ?? at.efetivo ?? 0,
-              percentual_executado: Math.round((ap?.percentual_executado ?? 0) / 5) * 5,
-              observacao: '',
-              status: ap?.status ?? 'EM_ANDAMENTO',
-            }
-          }
-        }
-        return next
-      })
-    }
 
     // Verifica atrasadas: busca último apontamento por atividade
     if (candidatasAtrasadas.length > 0) {
@@ -259,21 +243,34 @@ export default function ApontamentosPage() {
       })))
     }
 
-    const resQuota = await fetch(`/api/empresa/${empresa.id}/storage-quota`)
-    if (resQuota.ok) setQuota(await resQuota.json())
-
     setCarregando(false)
   }, [obraId, empresa])
-
-  const fetchQuota = useCallback(async () => {
-    if (!empresa) return
-    const res = await fetch(`/api/empresa/${empresa.id}/storage-quota`)
-    if (res.ok) setQuota(await res.json())
-  }, [empresa])
 
   useEffect(() => {
     if (!authLoading && empresa) fetchDados()
   }, [authLoading, empresa, fetchDados])
+
+  // Pré-preenche forms quando AMBOS chegam: atividades (fetchDados) + apontamentos (React Query)
+  // Guarda: só preenche campos ainda não editados pelo usuário (!next[at.id])
+  useEffect(() => {
+    if (!atividades.length || !apontamentosCarregados) return
+    const porAtividade = Object.fromEntries(apontamentosHoje.map(a => [a.atividade_id, a]))
+    setForms(prev => {
+      const next = { ...prev }
+      for (const at of atividades) {
+        if (!next[at.id]) {
+          const ap = porAtividade[at.id]
+          next[at.id] = {
+            efetivo_real: ap?.efetivo_real ?? at.efetivo ?? 0,
+            percentual_executado: Math.round((ap?.percentual_executado ?? 0) / 5) * 5,
+            observacao: '',
+            status: ap?.status ?? 'EM_ANDAMENTO',
+          }
+        }
+      }
+      return next
+    })
+  }, [apontamentosHoje, apontamentosCarregados, atividades])
 
   const validarApontamento = (atividadeId: number): boolean => {
     const form = forms[atividadeId]
@@ -306,11 +303,9 @@ export default function ApontamentosPage() {
 
     if (res.ok) {
       const { apontamento } = await res.json()
-      setApontamentosHoje(prev => {
-        const idx = prev.findIndex(a => a.atividade_id === atividadeId)
-        if (idx >= 0) { const n = [...prev]; n[idx] = apontamento; return n }
-        return [...prev, apontamento]
-      })
+
+      // Invalida cache do React Query para refetch automático
+      void queryClient.invalidateQueries({ queryKey: ['apontamentos', obraId, hoje()] })
 
       const arquivo = arquivosPendentes[atividadeId]
       if (arquivo && empresa) {
@@ -327,7 +322,8 @@ export default function ApontamentosPage() {
           setUploadStatus(prev => ({ ...prev, [atividadeId]: 'sucesso' }))
           setFotoUrls(prev => ({ ...prev, [atividadeId]: result.foto_url }))
           setArquivosPendentes(prev => ({ ...prev, [atividadeId]: null }))
-          void fetchQuota()
+          // Invalida cache de quota após upload para atualizar a barra
+          void queryClient.invalidateQueries({ queryKey: ['quota', empresa.id] })
         } catch (err) {
           setUploadStatus(prev => ({ ...prev, [atividadeId]: 'erro' }))
           setUploadErroMsg(prev => ({ ...prev, [atividadeId]: err instanceof Error ? err.message : 'Erro no upload.' }))
