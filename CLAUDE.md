@@ -35,7 +35,10 @@ Estes conceitos são fundamentais para entender qualquer pedido relacionado ao d
 - **TypeScript 5**
 - **Tailwind CSS v4** — Tailwind puro, sem shadcn/ui ou outras bibliotecas de componentes
 - **Supabase** (Postgres + Auth + Storage) — `@supabase/ssr` 0.10.2 para SSR/cookies, `@supabase/supabase-js` 2.104.1
+- **React Query 5.100.9** (`@tanstack/react-query`) — cache, sincronização e invalidação de queries
 - **Recharts 3.8.1** — apenas para Curva S no dashboard
+- **browser-image-compression 2.0.2** — compressão de fotos antes do upload (máx 0.8 MB, 1920px)
+- **Zod 4.4.2** — validação de schema no upload e apontamentos
 - **Vitest 4.1.5** — testes unitários de funções puras em `app/lib/`
 - **Vercel** (deploy em produção, branch `main`)
 
@@ -48,7 +51,7 @@ plansaas/
 ├── proxy.ts                          # Proteção de rotas (Next.js 16 — NÃO é middleware.ts)
 ├── app/
 │   ├── layout.tsx                    # RootLayout — envolve tudo com <AuthProvider>
-│   ├── providers.tsx                 # AuthContext: user, empresa, role, signOut, loading
+│   ├── providers.tsx                 # AuthProvider: AuthContext + QueryClientProvider + ReactQueryDevtools
 │   ├── calendario.ts                 # FONTE DE VERDADE para cálculos de datas úteis
 │   ├── page.tsx                      # Home: lista e criação de obras
 │   ├── login/page.tsx                # Login email+senha e Google OAuth
@@ -56,17 +59,21 @@ plansaas/
 │   ├── setup/page.tsx                # Primeiro acesso: criar empresa
 │   ├── auth/callback/route.ts        # Callback PKCE (code) e OTP (token_hash)
 │   ├── api/
+│   │   ├── me/route.ts                               # GET: usuário + empresa (service_role, sem RLS)
 │   │   ├── invite/route.ts                           # POST: convite de membro via service role
-│   │   ├── empresa/[id]/storage-quota/route.ts       # GET: quota de storage (cache 5min)
-│   │   ├── medicoes/upload/route.ts                  # POST: upload foto (magic bytes, máx 1MB)
+│   │   ├── empresa/[id]/storage-quota/route.ts       # GET: quota de storage da empresa
+│   │   ├── medicoes/upload/route.ts                  # POST: upload foto (magic bytes, máx 1MB, vincula apontamento_id)
 │   │   └── obras/[id]/
 │   │       ├── apontamentos/route.ts                 # GET (filtros data/range) + POST
 │   │       └── apontamentos/[apontamentoId]/route.ts # PUT + DELETE
 │   ├── configuracoes/equipe/page.tsx # Gestão de membros (admin only)
 │   ├── lib/
 │   │   ├── types.ts                  # Interfaces centralizadas (Obra, Atividade, ApontamentoDiario, …)
+│   │   ├── schemas.ts                # Validações Zod (ApontamentoDiarioSchema, MedicaoSchema)
 │   │   ├── calculador-avanco.ts      # Funções puras: desvio, CurvaS, deltaEfetivo, resumoObra
-│   │   └── apontamentos.ts           # Helpers de BD: getApontamentosDoDia, atualizarApontamento, …
+│   │   ├── apontamentos.ts           # Helpers de BD: getApontamentosDoDia, atualizarApontamento, …
+│   │   ├── upload-helper.ts          # uploadFotoComRetry: compressão + retry exponencial (até 3 tentativas)
+│   │   └── query-hooks.ts            # React Query hooks: useStorageQuota, useApontamentosHoje
 │   └── obras/[id]/
 │       ├── page.tsx                  # Config da obra: pavimentos, feriados, foto
 │       ├── linha-balanco/
@@ -103,7 +110,10 @@ plansaas/
 │       │       ├── CurvaS.tsx           # AreaChart (Recharts)
 │       │       ├── RowHighlight.tsx     # Linha reutilizável c/ desvio, delta, status
 │       │       └── TabelaAtencao.tsx    # Filtros automáticos + drawer histórico
-│       ├── apontamentos/page.tsx     # Formulário de apontamento diário por atividade
+│       ├── apontamentos/
+│       │   ├── page.tsx              # Mobile-first, accordion, React Query, upload staged, atrasadas
+│       │   └── components/
+│       │       └── UploadFoto.tsx    # Componente de upload staged: preview local → upload ao salvar
 │       ├── criacao-em-lote/page.tsx  # Wizard de criação de blocos e pavimentos
 │       └── editar-bloco/[bloco]/page.tsx
 │           pavimentos/[pavimentoId]/page.tsx
@@ -118,16 +128,27 @@ plansaas/
 
 ### Fluxo de autenticação
 
-1. `proxy.ts` intercepta todas as requisições (exceto `_next/*`, assets estáticos)
+1. `proxy.ts` intercepta todas as requisições (exceto `_next/*`, assets estáticos) — usa `getSession()` (cookie local, sem rede)
 2. Rotas públicas: `/login`, `/signup`, `/auth/callback`
 3. Usuário autenticado sem empresa → redirecionado para `/setup`
-4. `AuthProvider` em `providers.tsx` expõe contexto global via `useAuth()`
+4. `AuthProvider` em `providers.tsx` carrega empresa via `/api/me` (server-side, service_role, sem RLS)
+5. `useAuth()` expõe `{ user, empresa, role, loading, empresaFetched }` globalmente
+6. Após criar empresa em `/setup`: redireciona via `window.location.href = '/'` (hard reload — reinicializa AuthProvider)
 
 ### Cliente Supabase
 
 - **Browser**: `lib/supabase/client.ts` — singleton via `createBrowserClient` do `@supabase/ssr`. **Todas** as páginas usam este singleton.
 - **Server (proxy, callbacks, API routes)**: `createServerClient` do `@supabase/ssr` com cookies do request
 - **Admin (service role)**: instância avulsa de `@supabase/supabase-js` criada dentro de API routes, nunca exposta ao browser
+
+### Cache (React Query)
+
+- `QueryClientProvider` em `providers.tsx` — staleTime 5 min, gcTime 10 min, retry 1, refetchOnWindowFocus false
+- `useStorageQuota(empresaId)` em `app/lib/query-hooks.ts` — quota de storage; invalida após upload via `invalidateQueries`
+- `useApontamentosHoje(obraId, data, enabled?)` em `app/lib/query-hooks.ts` — apontamentos do dia; invalida após salvar
+- `queryClient.invalidateQueries` é o mecanismo de sincronização — **sem optimistic sync** (upload de foto não é reversível)
+- `ReactQueryDevtools` disponível em desenvolvimento (painel no rodapé da página)
+- Estrutura preparada para `persistQueryClient` + IndexedDB (PWA futuro)
 
 ---
 
@@ -317,6 +338,43 @@ Variáveis de ambiente ficam em `.env.local` (não commitado).
 ---
 
 ## Progresso / Changelog
+
+### 2026-05-09 — Upload Staged, Mobile-First Accordion e React Query Fase 1
+
+**Motivação**: melhorar UX mobile, garantir que fotos sejam salvas vinculadas ao apontamento e adicionar camada de cache client-side.
+
+**Upload Staged (foto só sobe ao salvar)**
+- `app/api/medicoes/upload/route.ts`: extrai `apontamento_id` do FormData e vincula ao insert em `medicoes`
+- `app/lib/upload-helper.ts` (novo): `uploadFotoComRetry` com compressão (`browser-image-compression`), retry exponencial (3 tentativas), validação magic bytes (JPEG/PNG/WebP), progresso 0–100%
+- `app/obras/[id]/apontamentos/components/UploadFoto.tsx` (novo): componente controlado — exibe preview local (objectURL), não faz upload automático; parent gerencia arquivo pendente
+- `apontamentos/page.tsx`: 5 registros de estado (`arquivosPendentes`, `uploadStatus`, `uploadProgresso`, `uploadErroMsg`, `fotoUrls`); upload acionado dentro de `handleSalvar` após POST do apontamento
+
+**Mobile-First Accordion**
+- `apontamentos/page.tsx` completamente redesenhado: cards em accordion (`expandidoCard: number | null`), um card aberto por vez
+- Touch targets ≥ 44px (inputs), ≥ 48px (botões), font-size ≥ 16px (sem zoom iOS)
+- Auto-colapso após salvar com sucesso (`setExpandidoCard(null)`)
+- Sistema de toast fixo no topo (z-50): sucesso 3s / erro 4s
+- Skeleton de carregamento com animação pulse
+- Histórico dos últimos 7 dias colapsável (`historicoAberto`)
+
+**Seção "Atrasadas"**
+- Query busca atividades com `data_inicio <= hoje` (sem filtro de `data_fim`)
+- Separa em `ativasHoje` (data_fim >= hoje) e `candidatasAtrasadas`
+- Para candidatas: busca último apontamento de cada uma, filtra fora as com `percentual_executado = 100` ou `status = CONCLUIDA_NO_DIA`
+- Resultado exibido em seção separada no topo da página de apontamentos
+
+**React Query Fase 1**
+- `@tanstack/react-query` instalado (v5.100.9)
+- `app/lib/query-hooks.ts` (novo): `useStorageQuota` e `useApontamentosHoje`
+- `app/providers.tsx` atualizado: `QueryClientProvider` + `ReactQueryDevtools` embutidos no `AuthProvider`
+- `apontamentos/page.tsx`: migrado de fetch manual para hooks; race condition corrigida com flag `isSuccess` (pre-fill só roda quando `apontamentosCarregados === true` E `atividades.length > 0`)
+- Dashboard **não alterado** — React Query Fase 3 é tarefa futura de alto risco
+
+**Correções de Cold Start**
+- `app/api/me/route.ts` (novo): carrega usuário + empresa via service_role sem depender de RLS no browser
+- `providers.tsx`: `loadEmpresa` chama `/api/me` em vez de queries diretas ao Supabase no browser; failsafe de 8s mantido
+
+---
 
 ### 2026-05-02 — Sistema de Monitoramento Planejado vs. Real (Etapas 1–8)
 
