@@ -174,3 +174,10 @@ export interface ResumoAvancoObra {
   atividades_atrasadas: DesvioAtividade[];
   data_calculo: string;
 }
+
+export interface Dependencia {
+  id: string;
+  predecessora_id: number;
+  sucessora_id: number;
+  lag_dias: number;
+}

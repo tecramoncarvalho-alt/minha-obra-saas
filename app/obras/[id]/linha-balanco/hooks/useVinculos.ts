@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { parseDate, diffDias } from '@/app/calendario';
-import type { Atividade, PavComAtiv } from '@/app/lib/types';
+import type { Atividade, PavComAtiv, Dependencia } from '@/app/lib/types';
 
 const ALTURA_LINHA = 44;
 
@@ -9,6 +9,8 @@ export function useVinculos(
   hoverVinculo: string | null,
   dataMin: Date,
   totalDias: number,
+  dependencias: Dependencia[] = [],
+  hoverAtividadeId: number | null = null,
 ) {
   const atividadesVinculadas = useMemo(() => {
     const map: Record<string, number[]> = {};
@@ -61,5 +63,35 @@ export function useVinculos(
     return linhas;
   }, [hoverVinculo, pavimentosExibidos, dataMin, totalDias]);
 
-  return { atividadesVinculadas, linhasVinculo };
+  const linhasDependencias = useMemo(() => {
+    if (!hoverAtividadeId) return [];
+
+    const depsRelacionadas = dependencias.filter(
+      d => d.predecessora_id === hoverAtividadeId || d.sucessora_id === hoverAtividadeId
+    );
+    if (!depsRelacionadas.length) return [];
+
+    const coords: Record<number, { cx: number; cy: number }> = {};
+    pavimentosExibidos.forEach((pav, pavIdx) => {
+      pav.atividades.forEach(at => {
+        const startDia = diffDias(dataMin, parseDate(at.data_inicio));
+        const dur = diffDias(parseDate(at.data_inicio), parseDate(at.data_fim)) + 1;
+        const cx = (startDia + dur / 2) / totalDias;
+        let cy = 32;
+        for (let i = 0; i < pavIdx; i++) cy += pavimentosExibidos[i].numLinhas * ALTURA_LINHA;
+        cy += (at.linha_index ?? 0) * ALTURA_LINHA + ALTURA_LINHA / 2;
+        coords[at.id] = { cx, cy };
+      });
+    });
+
+    return depsRelacionadas
+      .filter(d => coords[d.predecessora_id] && coords[d.sucessora_id])
+      .map(d => ({
+        x1: coords[d.predecessora_id].cx, y1: coords[d.predecessora_id].cy,
+        x2: coords[d.sucessora_id].cx,   y2: coords[d.sucessora_id].cy,
+        lag: d.lag_dias,
+      }));
+  }, [hoverAtividadeId, dependencias, pavimentosExibidos, dataMin, totalDias]);
+
+  return { atividadesVinculadas, linhasVinculo, linhasDependencias };
 }

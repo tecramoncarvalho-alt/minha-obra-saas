@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
-import type { Obra, Feriado, Pavimento, Subatividade, Atividade, PavComAtiv, Versao, ApontamentoDiario, StatusAtividade } from '@/app/lib/types';
+import type { Obra, Feriado, Pavimento, Subatividade, Atividade, PavComAtiv, Versao, ApontamentoDiario, StatusAtividade, Dependencia } from '@/app/lib/types';
 import { getCor, getCorSub, calcDuracaoTotal, coresCache } from './utils/geradorCores';
 import { gerarUUID } from './utils/helpers';
 import { parseDate, toStr, addDias, diffDias, LABEL_DIA } from '@/app/calendario';
@@ -21,6 +21,7 @@ import { ModalEditarLinhas } from './components/modais/ModalEditarLinhas';
 import { ModalSaida } from './components/modais/ModalSaida';
 import { ModalSalvarVersao } from './components/modais/ModalSalvarVersao';
 import { ModalHistoricoVersoes } from './components/modais/ModalHistoricoVersoes';
+import { ModalAdicionarDependencia } from './components/modais/ModalAdicionarDependencia';
 import { LegendaCores } from './components/LegendaCores';
 import { GraficoLinhaBalanco } from './components/GraficoLinhaBalanco';
 import { ToolbarSuperior } from './components/ToolbarSuperior';
@@ -208,7 +209,7 @@ export default function LinhaDeBalanco() {
 
   const {
     atualizarAtividadeLocal, removerAtividadeLocal,
-    propagarVinculoLocal, atualizarNumLinhasBloco,
+    propagarVinculoLocal, propagarDependenciasLocal, atualizarNumLinhasBloco,
   } = useAtividades(setPavimentos, marcarDirty, calendarioRef, calcDataFimUtil);
 
   // Tooltip
@@ -225,6 +226,10 @@ export default function LinhaDeBalanco() {
     pav?: PavComAtiv; diaClicado?: number; linhaClicada?: number;
     at?: Atividade;
   } | null>(null);
+
+  // ─── Dependências externas (cross-chain) ───
+  const [dependencias, setDependencias] = useState<Dependencia[]>([]);
+  const [modalAdicionarDep, setModalAdicionarDep] = useState<{ at: Atividade } | null>(null);
 
   // Modal de criação
   const [modalCriar, setModalCriar] = useState<{
@@ -336,6 +341,16 @@ export default function LinhaDeBalanco() {
         .order('data_inicio');
 
       const atividadeIds = (todasAtivs ?? []).map((a: { id: number }) => a.id);
+
+      if (atividadeIds.length > 0) {
+        const { data: deps } = await supabase
+          .from('dependencias')
+          .select('*')
+          .or(`predecessora_id.in.(${atividadeIds.join(',')}),sucessora_id.in.(${atividadeIds.join(',')})`);
+        setDependencias((deps ?? []) as Dependencia[]);
+      } else {
+        setDependencias([]);
+      }
 
       const { data: todasSubs } = atividadeIds.length > 0
         ? await supabase
@@ -683,9 +698,9 @@ export default function LinhaDeBalanco() {
   const { drag, handleMouseDown } = useDragAndDrop({
     dataMin, totalDias, containerRef, modoLeitura, supabase,
     feriadosSet, sabadoUtil, domingoUtil, calcDataFimUtil,
-    propagarVinculoLocal, atualizarAtividadeLocal, atualizarSnapshotVersaoAtiva,
+    propagarVinculoLocal, propagarDependenciasLocal, atualizarAtividadeLocal, atualizarSnapshotVersaoAtiva,
     setMensagem, setTooltip, setAtualizando, setCtxMenu: (v) => setCtxMenu(v),
-    pavimentos,
+    pavimentos, dependencias,
   });
 
   // ─── Menu de Contexto ───
@@ -1046,6 +1061,24 @@ export default function LinhaDeBalanco() {
     setTimeout(() => setMensagem(null), 4000);
   };
 
+  // ─── Dependências externas CRUD ───
+  const handleAdicionarDependencia = async (predecessoraId: number, lag: number) => {
+    if (!modalAdicionarDep) return;
+    const sucId = modalAdicionarDep.at.id;
+    const { data, error } = await supabase.from('dependencias')
+      .insert({ predecessora_id: predecessoraId, sucessora_id: sucId, lag_dias: lag })
+      .select().single();
+    if (!error && data) {
+      setDependencias(prev => [...prev, data as Dependencia]);
+    }
+    setModalAdicionarDep(null);
+  };
+
+  const handleRemoverDependencia = async (depId: string) => {
+    await supabase.from('dependencias').delete().eq('id', depId);
+    setDependencias(prev => prev.filter(d => d.id !== depId));
+  };
+
   // ─── Editar linhas do bloco ───
   const calcularConflitosReducao = (blocoNome: string, novasLinhas: number) => {
     return pavimentosExibidos
@@ -1087,7 +1120,10 @@ export default function LinhaDeBalanco() {
     setTimeout(() => setMensagem(null), 3000);
   };
 
-  const { linhasVinculo } = useVinculos(pavimentosExibidos, hoverVinculo, dataMin, totalDias);
+  const [hoverAtividadeId, setHoverAtividadeId] = useState<number | null>(null);
+  const { linhasVinculo, linhasDependencias } = useVinculos(
+    pavimentosExibidos, hoverVinculo, dataMin, totalDias, dependencias, hoverAtividadeId,
+  );
   const totalAtividades = pavimentosExibidos.reduce((acc, p) => acc + p.atividades.length, 0);
 
   if (loading) return (
@@ -1182,6 +1218,7 @@ export default function LinhaDeBalanco() {
                   conflitos={conflitos}
                   hoverVinculo={hoverVinculo}
                   linhasVinculo={linhasVinculo}
+                  linhasDependencias={linhasDependencias}
                   graficoRef={graficoRef}
                   modoLeitura={modoLeitura}
                   atualizando={atualizando}
@@ -1192,10 +1229,11 @@ export default function LinhaDeBalanco() {
                     if (!drag) {
                       setTooltip({ at, pav, x: e.clientX, y: e.clientY });
                       if (at.vinculo_id) setHoverVinculo(at.vinculo_id);
+                      setHoverAtividadeId(at.id);
                     }
                   }}
                   onMouseLeaveAt={() => {
-                    if (!drag) { setTooltip(null); setHoverVinculo(null); }
+                    if (!drag) { setTooltip(null); setHoverVinculo(null); setHoverAtividadeId(null); }
                   }}
                   onEditarBloco={(blocoNome, linhasAtuais) => {
                     if (modoLeitura) {
@@ -1280,6 +1318,21 @@ export default function LinhaDeBalanco() {
           handleSalvarEdicao={handleSalvarEdicao}
           abrirExcluirAtividade={abrirExcluirAtividade}
           onCancelar={() => setModalEditar(null)}
+          dependencias={dependencias}
+          pavimentosExibidos={pavimentosExibidos}
+          handleRemoverDependencia={handleRemoverDependencia}
+          setModalAdicionarDep={setModalAdicionarDep}
+        />
+      )}
+
+      {/* ─── Modal Adicionar Dependência Externa ─── */}
+      {modalAdicionarDep && (
+        <ModalAdicionarDependencia
+          modalAdicionarDep={modalAdicionarDep}
+          pavimentosExibidos={pavimentosExibidos}
+          dependencias={dependencias}
+          onConfirmar={handleAdicionarDependencia}
+          onCancelar={() => setModalAdicionarDep(null)}
         />
       )}
 

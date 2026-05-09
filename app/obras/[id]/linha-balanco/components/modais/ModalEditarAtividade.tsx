@@ -1,5 +1,5 @@
 import { parseDate, toStr } from '@/app/calendario';
-import type { Atividade, PavComAtiv } from '@/app/lib/types';
+import type { Atividade, PavComAtiv, Dependencia } from '@/app/lib/types';
 import { getCorSub, calcDuracaoTotal } from '../../utils/geradorCores';
 import { fmtDate, gerarUUID } from '../../utils/helpers';
 
@@ -20,6 +20,10 @@ interface Props {
   handleSalvarEdicao: () => void;
   abrirExcluirAtividade: () => void;
   onCancelar: () => void;
+  dependencias: Dependencia[];
+  pavimentosExibidos: PavComAtiv[];
+  handleRemoverDependencia: (depId: string) => Promise<void>;
+  setModalAdicionarDep: (v: { at: Atividade } | null) => void;
 }
 
 export function ModalEditarAtividade({
@@ -27,6 +31,7 @@ export function ModalEditarAtividade({
   salvandoEdicao, excluindoAt, calcDataFimUtil,
   handleQuebrarVinculo, setModalVincular, handleSalvarEdicao,
   abrirExcluirAtividade, onCancelar,
+  dependencias, pavimentosExibidos, handleRemoverDependencia, setModalAdicionarDep,
 }: Props) {
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
@@ -179,6 +184,63 @@ export function ModalEditarAtividade({
               </div>
             </div>
           )}
+        {/* Dependências externas (entre cadeias diferentes) */}
+        {(() => {
+          const predsExternas = dependencias.filter(d => d.sucessora_id === modalEditar.at.id);
+          const sucsExternas = dependencias.filter(d => d.predecessora_id === modalEditar.at.id);
+          const todasAtivs = pavimentosExibidos.flatMap(p => p.atividades);
+          return (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-semibold text-amber-800">🔀 Dependências Externas</p>
+                <button onClick={() => setModalAdicionarDep({ at: modalEditar.at })}
+                  className="px-2 py-1 bg-amber-100 text-amber-700 rounded text-xs font-bold hover:bg-amber-200">
+                  + Adicionar
+                </button>
+              </div>
+              {predsExternas.length === 0 && sucsExternas.length === 0 && (
+                <p className="text-xs text-amber-600">Nenhuma dependência externa.</p>
+              )}
+              {predsExternas.length > 0 && (
+                <div className="space-y-1">
+                  <p className="text-xs text-amber-700 font-semibold">Começa após:</p>
+                  {predsExternas.map(dep => {
+                    const pred = todasAtivs.find(a => a.id === dep.predecessora_id);
+                    return (
+                      <div key={dep.id} className="flex items-center justify-between text-xs bg-white rounded px-2 py-1">
+                        <span className="text-amber-700">
+                          ← {pred?.nome ?? `#${dep.predecessora_id}`}
+                          {dep.lag_dias !== 0 && <span className="ml-1 text-amber-500">(lag: {dep.lag_dias}d)</span>}
+                        </span>
+                        <button onClick={() => handleRemoverDependencia(dep.id)}
+                          className="text-red-400 hover:text-red-600 ml-2 font-bold">✕</button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {sucsExternas.length > 0 && (
+                <div className="space-y-1">
+                  <p className="text-xs text-amber-700 font-semibold">Precede:</p>
+                  {sucsExternas.map(dep => {
+                    const suc = todasAtivs.find(a => a.id === dep.sucessora_id);
+                    return (
+                      <div key={dep.id} className="flex items-center justify-between text-xs bg-white rounded px-2 py-1">
+                        <span className="text-amber-700">
+                          → {suc?.nome ?? `#${dep.sucessora_id}`}
+                          {dep.lag_dias !== 0 && <span className="ml-1 text-amber-500">(lag: {dep.lag_dias}d)</span>}
+                        </span>
+                        <button onClick={() => handleRemoverDependencia(dep.id)}
+                          className="text-red-400 hover:text-red-600 ml-2 font-bold">✕</button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
         </div>
 
         <div className="flex gap-2 mt-6">

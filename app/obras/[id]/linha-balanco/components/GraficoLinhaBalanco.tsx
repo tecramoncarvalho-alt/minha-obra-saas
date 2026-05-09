@@ -33,6 +33,10 @@ interface LinhaVinculo {
   x1: number; y1: number; x2: number; y2: number;
 }
 
+interface LinhaDependencia {
+  x1: number; y1: number; x2: number; y2: number; lag: number;
+}
+
 interface Props {
   pavimentosFiltrados: PavComAtiv[];
   diasCalendario: Date[];
@@ -48,6 +52,7 @@ interface Props {
   conflitos?: ConflitosState;
   hoverVinculo?: string | null;
   linhasVinculo?: LinhaVinculo[];
+  linhasDependencias?: LinhaDependencia[];
   graficoRef?: React.RefObject<HTMLDivElement | null>;
   modoLeitura?: boolean;
   atualizando?: boolean;
@@ -66,7 +71,7 @@ export function GraficoLinhaBalanco({
   pavimentosFiltrados, diasCalendario, dataMin, totalDias, pxPorDia,
   feriadosSet, sabadoUtil, domingoUtil,
   modoInterativo = false,
-  drag, conflitos, hoverVinculo, linhasVinculo, graficoRef: graficoRefProp,
+  drag, conflitos, hoverVinculo, linhasVinculo, linhasDependencias, graficoRef: graficoRefProp,
   modoLeitura, atualizando,
   onContextMenu, onContextMenuAt, onMouseDown, onMouseEnterAt, onMouseLeaveAt,
   onEditarBloco, stickyHeader = false,
@@ -113,6 +118,43 @@ export function GraficoLinhaBalanco({
                   strokeDasharray="8 5" strokeLinecap="round" markerEnd="url(#arrowVinculo)" />
                 <circle cx={x1} cy={y1} r={4} fill="rgba(139,92,246,0.9)" />
                 <circle cx={x2} cy={y2} r={4} fill="rgba(139,92,246,0.9)" />
+              </g>
+            );
+          })}
+        </svg>
+      )}
+
+      {/* SVG overlay para linhas de dependência cruzada (âmbar tracejado) */}
+      {modoInterativo && linhasDependencias && linhasDependencias.length > 0 && (
+        <svg
+          className="absolute inset-0 pointer-events-none z-30"
+          style={{ width: '100%', height: '100%' }}
+          preserveAspectRatio="none"
+        >
+          <defs>
+            <marker id="arrowDep" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+              <path d="M0,0 L0,6 L8,3 z" fill="rgba(245,158,11,0.9)" />
+            </marker>
+          </defs>
+          {linhasDependencias.map((l, i) => {
+            const totalW = larguraTotal;
+            const areaW = totalW - LARGURA_NOME;
+            const x1 = LARGURA_NOME + Math.max(0, Math.min(1, l.x1)) * areaW;
+            const x2 = LARGURA_NOME + Math.max(0, Math.min(1, l.x2)) * areaW;
+            const y1 = l.y1;
+            const y2 = l.y2;
+            if (x1 <= LARGURA_NOME && x2 <= LARGURA_NOME) return null;
+            if (x1 >= totalW && x2 >= totalW) return null;
+            const mx = (x1 + x2) / 2;
+            return (
+              <g key={`dep-${i}`}>
+                <path d={`M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`}
+                  fill="none" stroke="rgba(245,158,11,0.15)" strokeWidth="8" strokeLinecap="round" />
+                <path d={`M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`}
+                  fill="none" stroke="rgba(245,158,11,0.85)" strokeWidth="2"
+                  strokeDasharray="6 3" strokeLinecap="round" markerEnd="url(#arrowDep)" />
+                <circle cx={x1} cy={y1} r={4} fill="rgba(245,158,11,0.9)" />
+                <circle cx={x2} cy={y2} r={4} fill="rgba(245,158,11,0.9)" />
               </g>
             );
           })}

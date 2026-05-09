@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { parseDate, toStr, addDias, diffDias } from '@/app/calendario';
-import type { Atividade, PavComAtiv } from '@/app/lib/types';
+import type { Atividade, PavComAtiv, Dependencia } from '@/app/lib/types';
 import { createClient } from '@/lib/supabase/client';
 
 const ALTURA_LINHA = 44;
@@ -39,6 +39,7 @@ interface Params {
   domingoUtil: boolean;
   calcDataFimUtil: (inicio: Date, duracaoDias: number) => Date;
   propagarVinculoLocal: (vinculoId: string, atOrigemId: number, deltaDias: number) => void;
+  propagarDependenciasLocal: (atMovidaId: number, novoFim: string, deps: Dependencia[]) => void;
   atualizarAtividadeLocal: (atId: number, campos: Partial<Atividade>) => void;
   atualizarSnapshotVersaoAtiva: (pavs: PavComAtiv[]) => Promise<void>;
   setMensagem: (m: { tipo: 'success' | 'error'; texto: string } | null) => void;
@@ -46,13 +47,14 @@ interface Params {
   setAtualizando: (v: boolean) => void;
   setCtxMenu: (v: null) => void;
   pavimentos: PavComAtiv[];
+  dependencias: Dependencia[];
 }
 
 export function useDragAndDrop({
   dataMin, totalDias, containerRef, modoLeitura, supabase,
   feriadosSet, sabadoUtil, domingoUtil, calcDataFimUtil,
-  propagarVinculoLocal, atualizarAtividadeLocal, atualizarSnapshotVersaoAtiva,
-  setMensagem, setTooltip, setAtualizando, setCtxMenu, pavimentos,
+  propagarVinculoLocal, propagarDependenciasLocal, atualizarAtividadeLocal, atualizarSnapshotVersaoAtiva,
+  setMensagem, setTooltip, setAtualizando, setCtxMenu, pavimentos, dependencias,
 }: Params) {
   const [drag, setDrag] = useState<DragState | null>(null);
 
@@ -94,6 +96,35 @@ export function useDragAndDrop({
       refFim = novaDataFim;
     }
   }, [supabase, feriadosSet, sabadoUtil, domingoUtil, calcDataFimUtil]);
+
+  const propagarVinculoCruzadoAsync = useCallback(async (
+    atMovidaId: number,
+    novoFim: string,
+  ) => {
+    const deps = dependencias.filter(d => d.predecessora_id === atMovidaId);
+    for (const dep of deps) {
+      const newFimDate = parseDate(novoFim);
+      const lag = dep.lag_dias ?? 0;
+      const newInicio = addDiasUteisLocal(newFimDate, 1 + lag, feriadosSet, sabadoUtil, domingoUtil);
+
+      const { data: sucData } = await supabase.from('atividades')
+        .select('*').eq('id', dep.sucessora_id).single();
+      if (!sucData) continue;
+      const durUtil = sucData.duracao_dias ?? 1;
+      const newFimSuc = calcDataFimUtil(newInicio, durUtil);
+
+      await supabase.from('atividades').update({
+        data_inicio: toStr(newInicio), data_fim: toStr(newFimSuc),
+      }).eq('id', dep.sucessora_id);
+
+      if (sucData.vinculo_id) {
+        await propagarVinculo(
+          { ...sucData, data_inicio: toStr(newInicio), data_fim: toStr(newFimSuc) } as Atividade,
+          0, sucData.linha_index ?? 0, newInicio, newFimSuc,
+        );
+      }
+    }
+  }, [dependencias, feriadosSet, sabadoUtil, domingoUtil, calcDataFimUtil, supabase, propagarVinculo]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent, at: Atividade, pav: PavComAtiv) => {
     if (e.button !== 0) return;
@@ -156,6 +187,10 @@ export function useDragAndDrop({
         }).eq('id', drag.at.id);
       }
 
+      // Propagar dependências cruzadas
+      propagarDependenciasLocal(drag.at.id, toStr(novoFim), dependencias);
+      await propagarVinculoCruzadoAsync(drag.at.id, toStr(novoFim));
+
       const pavAtualizados = pavimentos.map(pav => ({
         ...pav,
         atividades: pav.atividades.map(at =>
@@ -174,7 +209,7 @@ export function useDragAndDrop({
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
     return () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
-  }, [drag, ppd, modoLeitura, calcDataFimUtil, propagarVinculo, propagarVinculoLocal, atualizarAtividadeLocal, atualizarSnapshotVersaoAtiva, setMensagem, setTooltip, setAtualizando, supabase, pavimentos]);
+  }, [drag, ppd, modoLeitura, calcDataFimUtil, propagarVinculo, propagarVinculoLocal, propagarDependenciasLocal, propagarVinculoCruzadoAsync, atualizarAtividadeLocal, atualizarSnapshotVersaoAtiva, setMensagem, setTooltip, setAtualizando, supabase, pavimentos, dependencias]);
 
   return { drag, setDrag, handleMouseDown };
 }
