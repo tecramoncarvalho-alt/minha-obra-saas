@@ -11,7 +11,7 @@ interface Log {
   details: Record<string, unknown>
   created_at: string
   empresas: { nome: string } | null
-  actors: { email: string } | null
+  actor_email: string | null
 }
 
 const ACTION_COLORS: Record<string, string> = {
@@ -81,7 +81,7 @@ export default function SuperAdminLogsPage() {
                       {log.target_type} <span className="text-slate-400 font-normal">#{log.target_id.slice(0, 8)}…</span>
                     </p>
                     <p className="text-slate-400 text-xs">
-                      por {log.actors?.email ?? log.actor_id.slice(0, 8)}
+                      por {log.actor_email ?? log.actor_id.slice(0, 8)}
                       {log.empresas && <> · {log.empresas.nome}</>}
                     </p>
                   </div>

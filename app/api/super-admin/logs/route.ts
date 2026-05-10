@@ -23,11 +23,11 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
   const empresaId = searchParams.get('empresa_id')
   const action = searchParams.get('action')
-  const limit = parseInt(searchParams.get('limit') ?? '100', 10)
+  const limit = parseInt(searchParams.get('limit') ?? '200', 10)
 
   let query = admin
     .from('audit_logs')
-    .select('*, empresas:empresa_id(nome), actors:actor_id(email)')
+    .select('id, actor_id, target_type, target_id, action, details, empresa_id, created_at, empresas:empresa_id(nome)')
     .order('created_at', { ascending: false })
     .limit(limit)
 
@@ -36,5 +36,22 @@ export async function GET(request: NextRequest) {
 
   const { data: logs } = await query
 
-  return NextResponse.json({ logs: logs ?? [] })
+  if (!logs || logs.length === 0) {
+    return NextResponse.json({ logs: [] })
+  }
+
+  const actorIds = [...new Set(logs.map(l => l.actor_id).filter(Boolean))]
+  const { data: authData } = await admin.auth.admin.listUsers({ perPage: 1000 })
+  const emailMap = new Map(
+    (authData?.users ?? [])
+      .filter(u => actorIds.includes(u.id))
+      .map(u => [u.id, u.email ?? null])
+  )
+
+  const enriched = logs.map(l => ({
+    ...l,
+    actor_email: emailMap.get(l.actor_id) ?? null,
+  }))
+
+  return NextResponse.json({ logs: enriched })
 }

@@ -7,7 +7,7 @@ interface Usuario {
   role: string
   is_owner: boolean
   created_at: string
-  users: { email: string } | null
+  email: string | null
   empresas: { nome: string; codigo_empresa: string | null } | null
 }
 
@@ -28,7 +28,7 @@ export default function SuperAdminUsuariosPage() {
   }, [])
 
   const filtrados = usuarios.filter(u =>
-    (u.users?.email ?? '').toLowerCase().includes(busca.toLowerCase()) ||
+    (u.email ?? '').toLowerCase().includes(busca.toLowerCase()) ||
     (u.empresas?.nome ?? '').toLowerCase().includes(busca.toLowerCase())
   )
 
@@ -61,7 +61,7 @@ export default function SuperAdminUsuariosPage() {
           <tbody className="divide-y divide-slate-700">
             {filtrados.map(u => (
               <tr key={u.user_id} className="text-slate-300 hover:bg-slate-750">
-                <td className="px-4 py-3 text-white">{u.users?.email ?? '(sem email)'}</td>
+                <td className="px-4 py-3 text-white">{u.email ?? '(sem email)'}</td>
                 <td className="px-4 py-3">{u.empresas?.nome ?? '—'}</td>
                 <td className="px-4 py-3 font-mono text-yellow-400 text-xs">{u.empresas?.codigo_empresa ?? '—'}</td>
                 <td className="px-4 py-3">

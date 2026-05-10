@@ -22,8 +22,20 @@ export async function GET() {
 
   const { data: memberships } = await admin
     .from('usuarios_empresas')
-    .select('user_id, role, is_owner, created_at, empresa_id, users:user_id(email), empresas:empresa_id(nome, codigo_empresa)')
+    .select('user_id, role, is_owner, created_at, empresa_id, empresas:empresa_id(nome, codigo_empresa)')
     .order('created_at', { ascending: false })
 
-  return NextResponse.json({ usuarios: memberships ?? [] })
+  if (!memberships || memberships.length === 0) {
+    return NextResponse.json({ usuarios: [] })
+  }
+
+  const { data: authData } = await admin.auth.admin.listUsers({ perPage: 1000 })
+  const emailMap = new Map((authData?.users ?? []).map(u => [u.id, u.email ?? null]))
+
+  const usuarios = memberships.map(m => ({
+    ...m,
+    email: emailMap.get(m.user_id) ?? null,
+  }))
+
+  return NextResponse.json({ usuarios })
 }
