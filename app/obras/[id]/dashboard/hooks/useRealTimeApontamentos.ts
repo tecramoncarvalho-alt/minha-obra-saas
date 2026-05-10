@@ -38,9 +38,9 @@ export function useRealTimeApontamentos({ obraId, enabled, intervalMs = 30_000 }
       try {
         const res = await fetch(`/api/obras/${obraId}/apontamentos?data=${hoje()}`)
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const data = await res.json() as ApontamentoDiario[]
+        const data = await res.json() as { apontamentos: ApontamentoDiario[] }
         if (!cancelled) {
-          setApontamentos(data)
+          setApontamentos(data.apontamentos ?? [])
           setUltimaAtualizacao(new Date())
         }
       } catch (e) {
