@@ -3,6 +3,7 @@ import type { Versao } from '@/app/lib/types';
 interface Props {
   modoLeitura: boolean;
   modoRascunho: boolean;
+  podeEditar: boolean;
   versaoAtual: Versao | null;
   mensagem: { tipo: 'success' | 'error'; texto: string } | null;
   onIniciarRascunho: () => void;
@@ -12,12 +13,21 @@ interface Props {
 }
 
 export function BannersLinhaBalanco({
-  modoLeitura, modoRascunho, versaoAtual, mensagem,
+  modoLeitura, modoRascunho, podeEditar, versaoAtual, mensagem,
   onIniciarRascunho, onHistorico, onSalvarVersao, onDescartarRascunho,
 }: Props) {
   return (
     <>
-      {modoLeitura && (
+      {modoLeitura && !podeEditar && (
+        <div className="mb-4 p-4 rounded-lg border-2 border-slate-300 bg-slate-50 flex items-center gap-3">
+          <span className="text-2xl">👁️</span>
+          <div>
+            <p className="font-bold text-slate-700">Modo Visualização</p>
+            <p className="text-sm text-slate-500">Seu perfil não permite editar a linha de balanço.</p>
+          </div>
+        </div>
+      )}
+      {modoLeitura && podeEditar && (
         <div className="mb-4 p-4 rounded-lg border-2 border-green-300 bg-green-50 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <span className="text-2xl">🔒</span>

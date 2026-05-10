@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
+import { useAuth } from '@/app/providers';
 
 interface Obra {
   id: number;
@@ -42,6 +43,13 @@ export default function EditarBloco() {
   const router = useRouter();
   const obraId = Number(params.id);
   const blocoNomeUrl = decodeURIComponent(params.bloco as string);
+  const { role, loading: authLoading } = useAuth();
+
+  useEffect(() => {
+    if (!authLoading && role !== 'admin' && role !== 'planejador') {
+      router.replace(`/obras/${obraId}`);
+    }
+  }, [authLoading, role, obraId, router]);
 
   const [obra, setObra] = useState<Obra | null>(null);
   const [pavimentos, setPavimentos] = useState<Pavimento[]>([]);

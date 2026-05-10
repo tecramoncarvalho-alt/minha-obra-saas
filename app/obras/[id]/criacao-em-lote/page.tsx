@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import { useAuth } from '@/app/providers';
 import { createClient } from '@/lib/supabase/client';
 
 // ─────────────────────────── Tipos ───────────────────────────
@@ -97,6 +98,13 @@ export default function CriacaoEmLote() {
   const params = useParams();
   const router = useRouter();
   const obraId = Number(params.id);
+  const { role, loading: authLoading } = useAuth();
+
+  useEffect(() => {
+    if (!authLoading && role !== 'admin' && role !== 'planejador') {
+      router.replace(`/obras/${obraId}`);
+    }
+  }, [authLoading, role, obraId, router]);
 
   const [blocos, setBlocos] = useState<Bloco[]>([criarBloco('torre')]);
   const [salvando, setSalvando] = useState(false);

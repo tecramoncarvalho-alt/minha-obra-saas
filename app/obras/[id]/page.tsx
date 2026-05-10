@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
+import { useAuth } from '@/app/providers';
 
 // ─────────────────────────── Tipos ───────────────────────────
 interface Obra {
@@ -154,6 +155,8 @@ export default function ObraDetalhes() {
   const params = useParams();
   const router = useRouter();
   const obraId = Number(params.id);
+  const { role } = useAuth();
+  const podeEditar = role === 'admin' || role === 'planejador';
 
   const [aba, setAba] = useState<'individual' | 'lote'>('individual');
   const [obra, setObra] = useState<Obra | null>(null);
@@ -584,9 +587,9 @@ export default function ObraDetalhes() {
 
               {/* Foto da obra */}
               <div
-                className="relative w-14 h-14 rounded-xl overflow-hidden flex-shrink-0 bg-slate-100 border-2 border-slate-200 cursor-pointer hover:border-blue-400 transition-colors group"
-                onClick={() => fotoInputRef.current?.click()}
-                title="Clique para alterar a foto"
+                className={`relative w-14 h-14 rounded-xl overflow-hidden flex-shrink-0 bg-slate-100 border-2 border-slate-200 transition-colors group ${podeEditar ? 'cursor-pointer hover:border-blue-400' : ''}`}
+                onClick={() => podeEditar && fotoInputRef.current?.click()}
+                title={podeEditar ? 'Clique para alterar a foto' : undefined}
               >
                 {obra.foto_url ? (
                   <img src={obra.foto_url} alt={obra.nome} className="w-full h-full object-cover" />
@@ -607,12 +610,14 @@ export default function ObraDetalhes() {
 
             {/* Botões */}
             <div className="flex items-center gap-2 flex-shrink-0">
-              <button
-                onClick={abrirEditarObra}
-                className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-sm font-semibold transition-colors"
-              >
-                ✏️ Editar
-              </button>
+              {podeEditar && (
+                <button
+                  onClick={abrirEditarObra}
+                  className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-sm font-semibold transition-colors"
+                >
+                  ✏️ Editar
+                </button>
+              )}
               <button
                 onClick={() => router.push(`/obras/${obraId}/dashboard`)}
                 className="px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-semibold transition-colors"
@@ -678,21 +683,23 @@ export default function ObraDetalhes() {
             >
               🏢 Estrutura da Obra
             </button>
-            <button
-              onClick={() => setAba('lote')}
-              className={`flex-1 px-6 py-4 text-sm font-semibold transition-colors ${
-                aba === 'lote'
-                  ? 'bg-green-50 text-green-700 border-b-2 border-green-600'
-                  : 'text-slate-600 hover:bg-slate-50'
-              }`}
-            >
-              🏗️ Nova Estrutura
-              {totalPavimentos > 0 && aba === 'lote' && (
-                <span className="ml-2 bg-green-600 text-white text-xs px-2 py-0.5 rounded-full">
-                  {totalPavimentos}
-                </span>
-              )}
-            </button>
+            {podeEditar && (
+              <button
+                onClick={() => setAba('lote')}
+                className={`flex-1 px-6 py-4 text-sm font-semibold transition-colors ${
+                  aba === 'lote'
+                    ? 'bg-green-50 text-green-700 border-b-2 border-green-600'
+                    : 'text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                🏗️ Nova Estrutura
+                {totalPavimentos > 0 && aba === 'lote' && (
+                  <span className="ml-2 bg-green-600 text-white text-xs px-2 py-0.5 rounded-full">
+                    {totalPavimentos}
+                  </span>
+                )}
+              </button>
+            )}
           </div>
 
           {/* ─── ABA INDIVIDUAL (ESTRUTURA DA OBRA) ─── */}
@@ -705,12 +712,14 @@ export default function ObraDetalhes() {
                   </h2>
                   <p className="text-sm text-slate-500 mt-1">Estrutura atual da obra</p>
                 </div>
-                <button
-                  onClick={() => setAba('lote')}
-                  className="px-6 py-3 bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg transition-colors flex items-center gap-2"
-                >
-                  🏗️ + Nova Estrutura
-                </button>
+                {podeEditar && (
+                  <button
+                    onClick={() => setAba('lote')}
+                    className="px-6 py-3 bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg transition-colors flex items-center gap-2"
+                  >
+                    🏗️ + Nova Estrutura
+                  </button>
+                )}
               </div>
 
               {/* Lista Agrupada por Blocos */}
@@ -765,18 +774,22 @@ export default function ObraDetalhes() {
 
                               {/* Botões + seta */}
                               <div className="flex items-center gap-2 ml-4">
-                                <button
-                                  onClick={(e) => { e.stopPropagation(); router.push(`/obras/${obraId}/editar-bloco/${encodeURIComponent(blocoNome)}`); }}
-                                  className="px-3 py-1 bg-blue-100 text-blue-700 rounded text-sm font-medium hover:bg-blue-200 transition-colors opacity-0 group-hover:opacity-100"
-                                >
-                                  ✏️ Editar
-                                </button>
-                                <button
-                                  onClick={(e) => { e.stopPropagation(); setBlocoParaExcluir(blocoNome); }}
-                                  className="px-3 py-1 bg-red-100 text-red-700 rounded text-sm font-medium hover:bg-red-200 transition-colors opacity-0 group-hover:opacity-100"
-                                >
-                                  🗑️ Excluir
-                                </button>
+                                {podeEditar && (
+                                  <>
+                                    <button
+                                      onClick={(e) => { e.stopPropagation(); router.push(`/obras/${obraId}/editar-bloco/${encodeURIComponent(blocoNome)}`); }}
+                                      className="px-3 py-1 bg-blue-100 text-blue-700 rounded text-sm font-medium hover:bg-blue-200 transition-colors opacity-0 group-hover:opacity-100"
+                                    >
+                                      ✏️ Editar
+                                    </button>
+                                    <button
+                                      onClick={(e) => { e.stopPropagation(); setBlocoParaExcluir(blocoNome); }}
+                                      className="px-3 py-1 bg-red-100 text-red-700 rounded text-sm font-medium hover:bg-red-200 transition-colors opacity-0 group-hover:opacity-100"
+                                    >
+                                      🗑️ Excluir
+                                    </button>
+                                  </>
+                                )}
                                 <span className={`text-slate-400 text-lg font-bold transition-transform duration-200 ${blocosAbertos.has(blocoNome) ? 'rotate-180' : ''}`}>
                                   ▼
                                 </span>
@@ -795,18 +808,14 @@ export default function ObraDetalhes() {
                                       )}
                                     </div>
                                     <div className="flex items-center gap-2 ml-4">
-                                      <button
-                                        onClick={() => router.push(`/obras/${obraId}/pavimentos/${pav.id}`)}
-                                        className="px-3 py-1 bg-blue-100 text-blue-700 rounded text-sm font-medium hover:bg-blue-200 transition-colors opacity-0 group-hover:opacity-100"
-                                      >
-                                        Atividades
-                                      </button>
-                                      <button
-                                        onClick={() => setPavimentoParaExcluir(pav)}
-                                        className="px-3 py-1 bg-red-100 text-red-700 rounded text-sm font-medium hover:bg-red-200 transition-colors opacity-0 group-hover:opacity-100"
-                                      >
-                                        🗑️ Excluir
-                                      </button>
+                                      {podeEditar && (
+                                        <button
+                                          onClick={() => setPavimentoParaExcluir(pav)}
+                                          className="px-3 py-1 bg-red-100 text-red-700 rounded text-sm font-medium hover:bg-red-200 transition-colors opacity-0 group-hover:opacity-100"
+                                        >
+                                          🗑️ Excluir
+                                        </button>
+                                      )}
                                     </div>
                                   </div>
                                 ))}

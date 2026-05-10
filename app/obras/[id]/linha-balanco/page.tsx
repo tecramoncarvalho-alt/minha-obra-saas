@@ -30,6 +30,7 @@ import { BannersLinhaBalanco } from './components/BannersLinhaBalanco';
 import { TelaCheia } from './components/TelaCheia';
 import { ContextMenu } from './components/ContextMenu';
 import { TooltipAtividade } from './components/TooltipAtividade';
+import { useAuth } from '@/app/providers';
 
 // ─── Meta helpers ───
 const PREFIXO_META = '__BLOCO__';
@@ -176,8 +177,10 @@ export default function LinhaDeBalanco() {
 
   // ─── Dirty State / Working Copy ───
   const [isDirty, setIsDirty] = useState(false);
-  // modoLeitura: bloqueado apenas se Definitiva E não iniciou rascunho
-  const modoLeitura = versaoAtual?.status === 'Definitiva' && !modoRascunho;
+  const { role } = useAuth();
+  const podeEditar = role === 'admin' || role === 'planejador';
+  // modoLeitura: bloqueado se Definitiva (sem rascunho) OU sem permissão de role
+  const modoLeitura = (versaoAtual?.status === 'Definitiva' && !modoRascunho) || !podeEditar;
 
   const [modalSaida, setModalSaida] = useState<{destino: string | null; tipo: 'navegacao' | 'fechar'} | null>(null);
   const destinoPendente = useRef<string | null>(null);
@@ -708,7 +711,10 @@ export default function LinhaDeBalanco() {
     e.preventDefault();
     e.stopPropagation();
     if (modoLeitura) {
-      setMensagem({ tipo: 'error', texto: '🔒 Versão Definitiva é somente leitura.' });
+      const msg = !podeEditar
+        ? '🔒 Seu perfil não permite edições na linha de balanço.'
+        : '🔒 Versão Definitiva é somente leitura.';
+      setMensagem({ tipo: 'error', texto: msg });
       setTimeout(() => setMensagem(null), 3000);
       return;
     }
@@ -719,7 +725,10 @@ export default function LinhaDeBalanco() {
     e.preventDefault();
     e.stopPropagation();
     if (modoLeitura) {
-      setMensagem({ tipo: 'error', texto: '🔒 Versão Definitiva é somente leitura.' });
+      const msg = !podeEditar
+        ? '🔒 Seu perfil não permite edições na linha de balanço.'
+        : '🔒 Versão Definitiva é somente leitura.';
+      setMensagem({ tipo: 'error', texto: msg });
       setTimeout(() => setMensagem(null), 3000);
       return;
     }
@@ -1146,6 +1155,7 @@ export default function LinhaDeBalanco() {
         versaoAtual={versaoAtual}
         modoLeitura={modoLeitura}
         modoRascunho={modoRascunho}
+        podeEditar={podeEditar}
         isDirty={isDirty}
         totalPavimentos={pavimentos.length}
         totalAtividades={totalAtividades}
@@ -1160,6 +1170,7 @@ export default function LinhaDeBalanco() {
         <BannersLinhaBalanco
           modoLeitura={modoLeitura}
           modoRascunho={modoRascunho}
+          podeEditar={podeEditar}
           versaoAtual={versaoAtual}
           mensagem={mensagem}
           onIniciarRascunho={iniciarRascunho}

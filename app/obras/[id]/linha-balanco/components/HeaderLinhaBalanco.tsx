@@ -5,6 +5,7 @@ interface Props {
   versaoAtual: Versao | null;
   modoLeitura: boolean;
   modoRascunho: boolean;
+  podeEditar: boolean;
   isDirty: boolean;
   totalPavimentos: number;
   totalAtividades: number;
@@ -19,7 +20,7 @@ const STATS = ['Pavimentos', 'Atividades', 'Dias'] as const;
 const STAT_COLORS = { Pavimentos: 'blue', Atividades: 'green', Dias: 'orange' } as const;
 
 export function HeaderLinhaBalanco({
-  obraNome, versaoAtual, modoLeitura, modoRascunho, isDirty,
+  obraNome, versaoAtual, modoLeitura, modoRascunho, podeEditar, isDirty,
   totalPavimentos, totalAtividades, totalDias,
   onVoltar, onHistorico, onSalvarVersao, onDashboard,
 }: Props) {
@@ -70,10 +71,12 @@ export function HeaderLinhaBalanco({
             </div>
           )}
 
-          <button onClick={onSalvarVersao}
-            className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-xs font-semibold transition-colors flex items-center gap-1">
-            💾 Salvar Versão
-          </button>
+          {podeEditar && (
+            <button onClick={onSalvarVersao}
+              className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-xs font-semibold transition-colors flex items-center gap-1">
+              💾 Salvar Versão
+            </button>
+          )}
 
           <button onClick={onDashboard}
             className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-semibold transition-colors">
