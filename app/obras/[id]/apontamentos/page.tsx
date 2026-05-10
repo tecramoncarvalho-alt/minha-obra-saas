@@ -3,7 +3,6 @@
 import { Fragment, useState, useEffect, useCallback } from 'react'
 import Image from 'next/image'
 import { useParams, useRouter } from 'next/navigation'
-import Link from 'next/link'
 import { useQueryClient } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
 import { useAuth } from '@/app/providers'
@@ -112,13 +111,15 @@ export default function ApontamentosPage() {
     useApontamentosHoje(obraId, hoje(), !authLoading && !!empresa)
   const { data: quota } = useStorageQuota(empresa?.id)
 
-  const [expandidoCard, setExpandidoCard] = useState<number | null>(null)
+  const [expandidosCards, setExpandidosCards] = useState<Set<number>>(new Set())
   const [historicoAberto, setHistoricoAberto] = useState(false)
   const [expandidoFotos, setExpandidoFotos] = useState<Record<string, boolean>>({})
   const [toasts, setToasts] = useState<ToastItem[]>([])
 
   const [forms, setForms] = useState<Record<number, ApontamentoForm>>({})
   const [salvando, setSalvando] = useState<Record<number, boolean>>({})
+  const [salvandoTodos, setSalvandoTodos] = useState(false)
+  const [formsModificados, setFormsModificados] = useState<Set<number>>(new Set())
   const [errors, setErrors] = useState<Record<number, Record<string, string>>>({})
 
   const [arquivosPendentes, setArquivosPendentes] = useState<Record<number, File | null>>({})
@@ -272,6 +273,17 @@ export default function ApontamentosPage() {
     })
   }, [apontamentosHoje, apontamentosCarregados, atividades])
 
+  const toggleCard = (id: number) => {
+    setExpandidosCards(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+
+  const marcarModificado = (id: number) =>
+    setFormsModificados(prev => new Set([...prev, id]))
+
   const validarApontamento = (atividadeId: number): boolean => {
     const form = forms[atividadeId]
     if (!form) return false
@@ -289,11 +301,10 @@ export default function ApontamentosPage() {
     return false
   }
 
-  const handleSalvar = async (atividadeId: number) => {
-    if (!validarApontamento(atividadeId)) return
+  const salvarUm = async (atividadeId: number): Promise<boolean> => {
+    if (!validarApontamento(atividadeId)) return false
     const form = forms[atividadeId]
-    if (!form) return
-    setSalvando(prev => ({ ...prev, [atividadeId]: true }))
+    if (!form) return false
 
     const res = await fetch(`/api/obras/${obraId}/apontamentos`, {
       method: 'POST',
@@ -301,44 +312,62 @@ export default function ApontamentosPage() {
       body: JSON.stringify({ atividade_id: atividadeId, data: hoje(), ...form }),
     })
 
-    if (res.ok) {
-      const { apontamento } = await res.json()
+    if (!res.ok) return false
+    const { apontamento } = await res.json()
 
-      // Invalida cache do React Query para refetch automático
-      void queryClient.invalidateQueries({ queryKey: ['apontamentos', obraId, hoje()] })
+    setFormsModificados(prev => { const n = new Set(prev); n.delete(atividadeId); return n })
+    void queryClient.invalidateQueries({ queryKey: ['apontamentos', obraId, hoje()] })
 
-      const arquivo = arquivosPendentes[atividadeId]
-      if (arquivo && empresa) {
-        setUploadStatus(prev => ({ ...prev, [atividadeId]: 'enviando' }))
-        setUploadProgresso(prev => ({ ...prev, [atividadeId]: 0 }))
-        try {
-          const result = await uploadFotoComRetry({
-            file: arquivo,
-            empresaId: empresa.id,
-            atividadeId,
-            apontamentoId: apontamento.id,
-            onProgress: (p) => setUploadProgresso(prev => ({ ...prev, [atividadeId]: p })),
-          })
-          setUploadStatus(prev => ({ ...prev, [atividadeId]: 'sucesso' }))
-          setFotoUrls(prev => ({ ...prev, [atividadeId]: result.foto_url }))
-          setArquivosPendentes(prev => ({ ...prev, [atividadeId]: null }))
-          // Invalida cache de quota após upload para atualizar a barra
-          void queryClient.invalidateQueries({ queryKey: ['quota', empresa.id] })
-        } catch (err) {
-          setUploadStatus(prev => ({ ...prev, [atividadeId]: 'erro' }))
-          setUploadErroMsg(prev => ({ ...prev, [atividadeId]: err instanceof Error ? err.message : 'Erro no upload.' }))
-          addToast('erro', err instanceof Error ? err.message : 'Erro no upload da foto.')
-        }
+    const arquivo = arquivosPendentes[atividadeId]
+    if (arquivo && empresa) {
+      setUploadStatus(prev => ({ ...prev, [atividadeId]: 'enviando' }))
+      setUploadProgresso(prev => ({ ...prev, [atividadeId]: 0 }))
+      try {
+        const result = await uploadFotoComRetry({
+          file: arquivo,
+          empresaId: empresa.id,
+          atividadeId,
+          apontamentoId: apontamento.id,
+          onProgress: (p) => setUploadProgresso(prev => ({ ...prev, [atividadeId]: p })),
+        })
+        setUploadStatus(prev => ({ ...prev, [atividadeId]: 'sucesso' }))
+        setFotoUrls(prev => ({ ...prev, [atividadeId]: result.foto_url }))
+        setArquivosPendentes(prev => ({ ...prev, [atividadeId]: null }))
+        void queryClient.invalidateQueries({ queryKey: ['quota', empresa.id] })
+      } catch (err) {
+        setUploadStatus(prev => ({ ...prev, [atividadeId]: 'erro' }))
+        setUploadErroMsg(prev => ({ ...prev, [atividadeId]: err instanceof Error ? err.message : 'Erro no upload.' }))
       }
-
-      addToast('sucesso', 'Apontamento salvo!')
-      setExpandidoCard(null) // colapsa o card após salvar com sucesso
-    } else {
-      const { error } = await res.json()
-      addToast('erro', error ?? 'Erro ao salvar apontamento.')
     }
+    return true
+  }
 
+  const handleSalvar = async (atividadeId: number) => {
+    setSalvando(prev => ({ ...prev, [atividadeId]: true }))
+    const ok = await salvarUm(atividadeId)
+    if (ok) addToast('sucesso', 'Apontamento salvo!')
+    else {
+      const bodyErr = await fetch(`/api/obras/${obraId}/apontamentos`, { method: 'HEAD' }).catch(() => null)
+      addToast('erro', 'Erro ao salvar apontamento.')
+      void bodyErr
+    }
     setSalvando(prev => ({ ...prev, [atividadeId]: false }))
+  }
+
+  const handleSalvarTodos = async () => {
+    const ids = [...formsModificados]
+    if (!ids.length) return
+    setSalvandoTodos(true)
+    let salvos = 0, erros = 0
+    for (const id of ids) {
+      const ok = await salvarUm(id)
+      ok ? salvos++ : erros++
+    }
+    void queryClient.invalidateQueries({ queryKey: ['apontamentos', obraId, hoje()] })
+    if (empresa) void queryClient.invalidateQueries({ queryKey: ['quota', empresa.id] })
+    setSalvandoTodos(false)
+    if (salvos > 0) addToast('sucesso', `${salvos} apontamento${salvos > 1 ? 's' : ''} salvo${salvos > 1 ? 's' : ''}!`)
+    if (erros > 0) addToast('erro', `${erros} apontamento${erros > 1 ? 's' : ''} com erro.`)
   }
 
   const handleStatusChange = (atividadeId: number, status: StatusAtividade) => {
@@ -349,6 +378,7 @@ export default function ApontamentosPage() {
       if (status === 'CONCLUIDA_NO_DIA') return { ...prev, [atividadeId]: { ...form, status, percentual_executado: 100 } }
       return { ...prev, [atividadeId]: { ...form, status } }
     })
+    marcarModificado(atividadeId)
   }
 
   const handlePercentualChange = (atividadeId: number, valor: number, form: ApontamentoForm) => {
@@ -357,6 +387,7 @@ export default function ApontamentosPage() {
       if (!window.confirm(`Avanço vai regredir de ${ultimo.percentual_executado}% para ${valor}%. Confirmar?`)) return
     }
     setForms(prev => ({ ...prev, [atividadeId]: { ...form, percentual_executado: valor } }))
+    marcarModificado(atividadeId)
   }
 
   const temErros = (atividadeId: number) => Object.keys(errors[atividadeId] ?? {}).length > 0
@@ -399,18 +430,19 @@ export default function ApontamentosPage() {
   // ─── Card de atividade ───────────────────────────────────────────────────────
 
   const renderCard = (at: Atividade, atrasada = false) => {
-    const aberto = expandidoCard === at.id
+    const aberto = expandidosCards.has(at.id)
+    const modificado = formsModificados.has(at.id)
     const form = forms[at.id] ?? { efetivo_real: at.efetivo ?? 0, percentual_executado: 0, observacao: '', status: 'EM_ANDAMENTO' as StatusAtividade }
     const isSalvando = salvando[at.id]
     const statusAtual = form.status
     const pctAtual = form.percentual_executado
 
     return (
-      <div key={at.id} className={`bg-white rounded-2xl border shadow-sm overflow-hidden ${atrasada ? 'border-orange-200' : 'border-gray-200'}`}>
+      <div key={at.id} className={`bg-white rounded-2xl border shadow-sm overflow-hidden ${atrasada ? 'border-orange-200' : modificado ? 'border-blue-300' : 'border-gray-200'}`}>
         {/* Cabeçalho — sempre visível, toque abre/fecha */}
         <button
           type="button"
-          onClick={() => setExpandidoCard(aberto ? null : at.id)}
+          onClick={() => toggleCard(at.id)}
           className={`w-full text-left px-4 py-4 flex items-start justify-between gap-3 active:bg-gray-50 ${aberto ? 'border-b border-gray-100' : ''}`}
         >
           <div className="flex-1 min-w-0">
@@ -419,6 +451,11 @@ export default function ApontamentosPage() {
               {atrasada && (
                 <span className="text-xs font-medium bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full shrink-0">
                   Atrasada
+                </span>
+              )}
+              {modificado && (
+                <span className="text-xs font-medium bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full shrink-0">
+                  Editado
                 </span>
               )}
             </div>
@@ -470,7 +507,7 @@ export default function ApontamentosPage() {
                       min={0}
                       value={form.efetivo_real}
                       disabled={form.status === 'PARALISADA'}
-                      onChange={e => setForms(prev => ({ ...prev, [at.id]: { ...form, efetivo_real: Number(e.target.value) } }))}
+                      onChange={e => { setForms(prev => ({ ...prev, [at.id]: { ...form, efetivo_real: Number(e.target.value) } })); marcarModificado(at.id) }}
                       onBlur={() => validarApontamento(at.id)}
                       className={`w-full h-11 border rounded-xl px-3 text-base text-center focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:bg-gray-50 ${errors[at.id]?.efetivo_real ? 'border-red-400' : 'border-gray-300'}`}
                     />
@@ -512,7 +549,7 @@ export default function ApontamentosPage() {
                   <label className="block text-sm font-medium text-gray-700 mb-1.5">Observações (opcional)</label>
                   <textarea
                     value={form.observacao}
-                    onChange={e => setForms(prev => ({ ...prev, [at.id]: { ...form, observacao: e.target.value } }))}
+                    onChange={e => { setForms(prev => ({ ...prev, [at.id]: { ...form, observacao: e.target.value } })); marcarModificado(at.id) }}
                     className="w-full border border-gray-300 rounded-xl px-3 py-3 text-base resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 min-h-[80px]"
                     placeholder="Observações sobre o andamento..."
                   />
@@ -536,15 +573,15 @@ export default function ApontamentosPage() {
                   />
                 )}
 
-                {/* Botão salvar */}
+                {/* Botão salvar individual */}
                 <button
                   onClick={() => handleSalvar(at.id)}
                   disabled={isSalvando || temErros(at.id)}
-                  className="w-full h-12 bg-green-600 disabled:bg-green-300 text-white text-base font-semibold rounded-xl active:bg-green-700 transition-colors flex items-center justify-center gap-2"
+                  className="w-full h-12 bg-slate-700 hover:bg-slate-800 disabled:bg-slate-300 text-white text-base font-semibold rounded-xl active:bg-slate-900 transition-colors flex items-center justify-center gap-2"
                 >
                   {isSalvando
                     ? <><span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Salvando...</>
-                    : '✓ Salvar apontamento'}
+                    : '✓ Salvar este'}
                 </button>
               </>
             ) : (
@@ -559,54 +596,71 @@ export default function ApontamentosPage() {
   // ─── Render ─────────────────────────────────────────────────────────────────
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-10">
+    <div className="min-h-screen bg-slate-50 pb-32">
 
-      {/* Toasts fixos no topo */}
-      <div className="fixed top-0 left-0 right-0 z-50 flex flex-col gap-2 px-4 pt-3 pointer-events-none">
+      {/* Toasts */}
+      <div className="fixed top-4 left-0 right-0 z-50 flex flex-col gap-2 px-4 pointer-events-none">
         {toasts.map(t => (
           <div
             key={t.id}
-            className={`flex items-center justify-between gap-3 px-4 py-3 rounded-xl shadow-lg text-white text-base font-medium pointer-events-auto ${t.tipo === 'sucesso' ? 'bg-green-600' : 'bg-red-600'}`}
+            className={`flex items-center justify-between gap-3 px-4 py-3 rounded-xl shadow-lg text-white text-sm font-medium pointer-events-auto max-w-lg mx-auto w-full ${t.tipo === 'sucesso' ? 'bg-green-600' : 'bg-red-600'}`}
           >
             <span>{t.tipo === 'sucesso' ? '✓' : '⚠️'} {t.texto}</span>
-            <button
-              onClick={() => removeToast(t.id)}
-              className="w-8 h-8 flex items-center justify-center text-white/80 text-xl leading-none"
-            >
-              ×
-            </button>
+            <button onClick={() => removeToast(t.id)} className="w-8 h-8 flex items-center justify-center text-white/80 text-xl leading-none">×</button>
           </div>
         ))}
       </div>
 
-      {/* Header sticky */}
-      <div className="sticky top-0 z-40 bg-white border-b border-gray-200 shadow-sm">
-        <div className="flex items-center gap-1 px-2 h-14 max-w-2xl mx-auto">
-          <button
-            onClick={() => router.push('/')}
-            className="w-10 h-10 flex items-center justify-center rounded-xl text-gray-500 text-2xl active:bg-gray-100 shrink-0"
-          >
-            ‹
-          </button>
-          <div className="flex-1 min-w-0 px-1">
-            <Link href={`/obras/${obraId}`} className="text-base font-semibold text-gray-900 truncate block leading-tight">
-              {obra.nome}
-            </Link>
-            <p className="text-xs text-gray-500 capitalize leading-tight">{fmtDataLonga()}</p>
+      {/* Header padronizado */}
+      <header className="bg-white border-b border-slate-200 shadow-sm">
+        <div className="max-w-7xl mx-auto px-6 py-4">
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <div className="flex items-center gap-4 min-w-0">
+              <button
+                onClick={() => router.push('/')}
+                className="text-blue-600 hover:text-blue-700 font-semibold flex-shrink-0"
+              >
+                ← Voltar
+              </button>
+              <div className="min-w-0">
+                <h1 className="text-xl font-bold text-slate-900 truncate">{obra.nome}</h1>
+                <p className="text-sm text-slate-500 capitalize">{fmtDataLonga()}</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 flex-shrink-0 flex-wrap">
+              <button
+                onClick={() => router.push(`/obras/${obraId}`)}
+                className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-sm font-semibold transition-colors"
+              >
+                ⚙️ Configurar
+              </button>
+              <button
+                onClick={() => router.push(`/obras/${obraId}/dashboard`)}
+                className="px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-semibold transition-colors"
+              >
+                📋 Dashboard
+              </button>
+              <button
+                onClick={() => router.push(`/obras/${obraId}/linha-balanco`)}
+                className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-semibold transition-colors"
+              >
+                📊 Linha de Balanço
+              </button>
+            </div>
           </div>
         </div>
 
-        {/* Barra de quota compacta */}
+        {/* Barra de quota */}
         {quota && (
-          <div className="px-4 pb-2.5 max-w-2xl mx-auto">
-            <div className="flex items-center gap-2">
-              <div className="flex-1 bg-gray-100 rounded-full h-1.5">
+          <div className="px-6 pb-3 max-w-7xl mx-auto">
+            <div className="flex items-center gap-2 max-w-sm">
+              <div className="flex-1 bg-slate-100 rounded-full h-1.5">
                 <div
                   className={`h-1.5 rounded-full transition-all ${corQuota(quota.percentual_usado)}`}
                   style={{ width: `${Math.min(100, quota.percentual_usado)}%` }}
                 />
               </div>
-              <span className="text-xs text-gray-400 shrink-0">
+              <span className="text-xs text-slate-400 shrink-0">
                 {formatBytes(quota.storage_usado_bytes)} / {formatBytes(quota.storage_limite_bytes)}
               </span>
             </div>
@@ -617,9 +671,25 @@ export default function ApontamentosPage() {
             )}
           </div>
         )}
-      </div>
+      </header>
 
-      <div className="max-w-2xl mx-auto px-4 pt-5 space-y-6">
+      {/* Botão flutuante Salvar Tudo */}
+      {podeEditar && formsModificados.size > 0 && (
+        <div className="fixed bottom-6 left-0 right-0 flex justify-center z-40 px-4 pointer-events-none">
+          <button
+            onClick={handleSalvarTodos}
+            disabled={salvandoTodos}
+            className="pointer-events-auto bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white font-bold px-8 py-4 rounded-2xl shadow-2xl text-base flex items-center gap-3 transition-all active:scale-95"
+          >
+            {salvandoTodos
+              ? <><span className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" /> Salvando...</>
+              : <>✓ Salvar tudo ({formsModificados.size})</>
+            }
+          </button>
+        </div>
+      )}
+
+      <div className="max-w-2xl mx-auto px-4 pt-6 space-y-6">
 
         {/* Seção: Hoje */}
         <section>
