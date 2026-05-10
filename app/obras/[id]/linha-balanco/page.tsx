@@ -677,6 +677,7 @@ export default function LinhaDeBalanco() {
         .nomeCol{width:${LARGURA_NOME}px;min-width:${LARGURA_NOME}px;border-right:1px solid #e2e8f0;padding:0 12px;display:flex;align-items:center}
         .nomeCol span{font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.05em}
         .diasArea{flex:1;position:relative;overflow:hidden}
+        *{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}
         @media print{body{padding:4px}@page{size:A3 landscape;margin:6mm}}
       </style>
     </head><body>
