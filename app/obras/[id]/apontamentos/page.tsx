@@ -345,12 +345,7 @@ export default function ApontamentosPage() {
   const handleSalvar = async (atividadeId: number) => {
     setSalvando(prev => ({ ...prev, [atividadeId]: true }))
     const ok = await salvarUm(atividadeId)
-    if (ok) addToast('sucesso', 'Apontamento salvo!')
-    else {
-      const bodyErr = await fetch(`/api/obras/${obraId}/apontamentos`, { method: 'HEAD' }).catch(() => null)
-      addToast('erro', 'Erro ao salvar apontamento.')
-      void bodyErr
-    }
+    addToast(ok ? 'sucesso' : 'erro', ok ? 'Apontamento salvo!' : 'Erro ao salvar apontamento.')
     setSalvando(prev => ({ ...prev, [atividadeId]: false }))
   }
 
@@ -560,7 +555,9 @@ export default function ApontamentosPage() {
                   <UploadFoto
                     onFileSelecionado={(file) => {
                       setArquivosPendentes(prev => ({ ...prev, [at.id]: file }))
-                      if (!file) {
+                      if (file) {
+                        marcarModificado(at.id)
+                      } else {
                         setUploadStatus(prev => ({ ...prev, [at.id]: 'idle' }))
                         setUploadErroMsg(prev => ({ ...prev, [at.id]: '' }))
                         setFotoUrls(prev => { const n = { ...prev }; delete n[at.id]; return n })
@@ -575,6 +572,7 @@ export default function ApontamentosPage() {
 
                 {/* Botão salvar individual */}
                 <button
+                  type="button"
                   onClick={() => handleSalvar(at.id)}
                   disabled={isSalvando || temErros(at.id)}
                   className="w-full h-12 bg-slate-700 hover:bg-slate-800 disabled:bg-slate-300 text-white text-base font-semibold rounded-xl active:bg-slate-900 transition-colors flex items-center justify-center gap-2"
@@ -606,7 +604,7 @@ export default function ApontamentosPage() {
             className={`flex items-center justify-between gap-3 px-4 py-3 rounded-xl shadow-lg text-white text-sm font-medium pointer-events-auto max-w-lg mx-auto w-full ${t.tipo === 'sucesso' ? 'bg-green-600' : 'bg-red-600'}`}
           >
             <span>{t.tipo === 'sucesso' ? '✓' : '⚠️'} {t.texto}</span>
-            <button onClick={() => removeToast(t.id)} className="w-8 h-8 flex items-center justify-center text-white/80 text-xl leading-none">×</button>
+            <button type="button" onClick={() => removeToast(t.id)} className="w-8 h-8 flex items-center justify-center text-white/80 text-xl leading-none">×</button>
           </div>
         ))}
       </div>
@@ -617,6 +615,7 @@ export default function ApontamentosPage() {
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <div className="flex items-center gap-4 min-w-0">
               <button
+                type="button"
                 onClick={() => router.push('/')}
                 className="text-blue-600 hover:text-blue-700 font-semibold flex-shrink-0"
               >
@@ -629,18 +628,21 @@ export default function ApontamentosPage() {
             </div>
             <div className="flex items-center gap-2 flex-shrink-0 flex-wrap">
               <button
+                type="button"
                 onClick={() => router.push(`/obras/${obraId}`)}
                 className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-sm font-semibold transition-colors"
               >
                 ⚙️ Configurar
               </button>
               <button
+                type="button"
                 onClick={() => router.push(`/obras/${obraId}/dashboard`)}
                 className="px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-semibold transition-colors"
               >
                 📋 Dashboard
               </button>
               <button
+                type="button"
                 onClick={() => router.push(`/obras/${obraId}/linha-balanco`)}
                 className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-semibold transition-colors"
               >
@@ -677,6 +679,7 @@ export default function ApontamentosPage() {
       {podeEditar && formsModificados.size > 0 && (
         <div className="fixed bottom-6 left-0 right-0 flex justify-center z-40 px-4 pointer-events-none">
           <button
+            type="button"
             onClick={handleSalvarTodos}
             disabled={salvandoTodos}
             className="pointer-events-auto bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white font-bold px-8 py-4 rounded-2xl shadow-2xl text-base flex items-center gap-3 transition-all active:scale-95"
@@ -765,6 +768,7 @@ export default function ApontamentosPage() {
                           </div>
                           {fotosValidas.length > 0 && (
                             <button
+                              type="button"
                               onClick={() => setExpandidoFotos(prev => ({ ...prev, [row.id]: !fotosAberto }))}
                               className="w-10 h-10 flex items-center justify-center rounded-xl bg-gray-100 text-gray-600 text-sm font-medium shrink-0"
                             >

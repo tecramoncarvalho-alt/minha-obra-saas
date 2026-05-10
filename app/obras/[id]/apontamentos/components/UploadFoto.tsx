@@ -100,7 +100,7 @@ export default function UploadFoto({
     return (
       <div className="mt-2 space-y-1">
         <p className="text-sm text-red-600">⚠️ {uploadErroMsg}</p>
-        <button onClick={remover} className="text-xs text-blue-600 underline">
+        <button type="button" onClick={remover} className="text-xs text-blue-600 underline">
           Tentar com outro arquivo
         </button>
       </div>
@@ -117,6 +117,7 @@ export default function UploadFoto({
           <p className="text-xs text-blue-600 mt-0.5">Será salva ao salvar o apontamento</p>
         </div>
         <button
+          type="button"
           onClick={remover}
           className="text-gray-400 hover:text-red-500 text-xl leading-none flex-shrink-0"
           title="Remover foto"
