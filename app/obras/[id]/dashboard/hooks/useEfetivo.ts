@@ -6,13 +6,15 @@ export function useEfetivo(
   atividades: DashboardAtividade[],
   apontamentosHoje: ApontamentoDiario[],
   dataSelecionada: string,
+  enabled = true,
 ) {
-  const atividadesDoDia = useMemo(() =>
-    atividades.filter(a => estaNoIntervalo(dataSelecionada, a.data_inicio, a.data_fim)),
-    [atividades, dataSelecionada]
-  )
+  const atividadesDoDia = useMemo(() => {
+    if (!enabled) return []
+    return atividades.filter(a => estaNoIntervalo(dataSelecionada, a.data_inicio, a.data_fim))
+  }, [enabled, atividades, dataSelecionada])
 
   const efetivoPorEquipe = useMemo((): ItemEfetivo[] => {
+    if (!enabled) return []
     const mapa: Record<string, ItemEfetivo> = {}
     const garantirEquipe = (chave: string) => {
       if (!mapa[chave]) mapa[chave] = { equipe: chave, efetivo: 0, atividades: [] }
@@ -49,9 +51,10 @@ export function useEfetivo(
       if (b.efetivo !== a.efetivo) return b.efetivo - a.efetivo
       return a.equipe.localeCompare(b.equipe)
     })
-  }, [atividadesDoDia])
+  }, [enabled, atividadesDoDia])
 
   const equipesAtivas = useMemo(() => {
+    if (!enabled) return 0
     const set = new Set<string>()
     atividadesDoDia.forEach(at => {
       if (at.subatividades && at.subatividades.length > 0) {
@@ -67,20 +70,21 @@ export function useEfetivo(
   }, [atividadesDoDia])
 
   const avancoRealHoje = useMemo(() => {
-    if (!apontamentosHoje.length) return null
+    if (!enabled || !apontamentosHoje.length) return null
     const soma = apontamentosHoje.reduce((acc, a) => acc + a.percentual_executado, 0)
     return Math.round(soma / apontamentosHoje.length)
   }, [apontamentosHoje])
 
   const efetivoRealHoje = useMemo(
-    () => apontamentosHoje.reduce((acc, a) => acc + a.efetivo_real, 0),
-    [apontamentosHoje]
+    () => !enabled ? 0 : apontamentosHoje.reduce((acc, a) => acc + a.efetivo_real, 0),
+    [enabled, apontamentosHoje]
   )
 
   const atividadesSemApontamento = useMemo(() => {
+    if (!enabled) return []
     const idsComApontamento = new Set(apontamentosHoje.map(a => a.atividade_id))
     return atividadesDoDia.filter(at => !idsComApontamento.has(at.id))
-  }, [apontamentosHoje, atividadesDoDia])
+  }, [enabled, apontamentosHoje, atividadesDoDia])
 
   return {
     atividadesDoDia,

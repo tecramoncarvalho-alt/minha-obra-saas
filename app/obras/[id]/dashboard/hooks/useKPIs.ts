@@ -11,9 +11,10 @@ export function useKPIs(
   config: ConfigCalendario,
   dataSelecionada: string,
   obra: DashboardObra | null,
+  enabled = true,
 ) {
   const resumo = useMemo(() => {
-    if (!obra || atividades.length === 0) return null
+    if (!enabled || !obra || atividades.length === 0) return null
     return gerarResumoAvancoObra(
       obra as import('@/app/lib/types').Obra,
       atividades as LibAtividade[],
@@ -23,17 +24,18 @@ export function useKPIs(
     )
   }, [obra, atividades, todosApontamentos, config, dataSelecionada])
 
-  const desvios = useMemo(() =>
-    gerarDesviosPorAtividade(
+  const desvios = useMemo(() => {
+    if (!enabled) return []
+    return gerarDesviosPorAtividade(
       atividadesDoDia as LibAtividade[],
       todosApontamentos,
       config,
       dataSelecionada
-    ),
-    [atividadesDoDia, todosApontamentos, config, dataSelecionada]
-  )
+    )
+  }, [enabled, atividadesDoDia, todosApontamentos, config, dataSelecionada])
 
   const paralisadas = useMemo((): AtividadeParalisada[] => {
+    if (!enabled) return []
     const porAtividade = new Map<number, ApontamentoDiario>()
     for (const ap of todosApontamentos) {
       const atual = porAtividade.get(ap.atividade_id)
@@ -47,18 +49,20 @@ export function useKPIs(
         pavimentoNome: at.pavimento?.nome ?? 'Desconhecido',
         ultimoApontamento: porAtividade.get(at.id)!,
       }))
-  }, [atividades, todosApontamentos])
+  }, [enabled, atividades, todosApontamentos])
 
   const historicoPorAtividade = useMemo(() => {
+    if (!enabled) return {} as Record<number, ApontamentoDiario[]>
     const mapa: Record<number, ApontamentoDiario[]> = {}
     for (const ap of todosApontamentos) {
       if (!mapa[ap.atividade_id]) mapa[ap.atividade_id] = []
       mapa[ap.atividade_id].push(ap)
     }
     return mapa
-  }, [todosApontamentos])
+  }, [enabled, todosApontamentos])
 
   const itensAtencao = useMemo(() => {
+    if (!enabled) return []
     const porAtividade = new Map<number, ApontamentoDiario>()
     for (const ap of todosApontamentos) {
       const atual = porAtividade.get(ap.atividade_id)
@@ -75,10 +79,10 @@ export function useKPIs(
         }
       })
       .filter((x): x is NonNullable<typeof x> => x !== null)
-  }, [desvios, atividadesDoDia, todosApontamentos])
+  }, [enabled, desvios, atividadesDoDia, todosApontamentos])
 
   const dadosCurvaS = useMemo(() => {
-    if (!obra?.data_inicio || !obra?.data_fim || atividades.length === 0) return []
+    if (!enabled || !obra?.data_inicio || !obra?.data_fim || atividades.length === 0) return []
     const [y1, m1, d1] = obra.data_inicio.split('-').map(Number)
     const [y2, m2, d2] = obra.data_fim.split('-').map(Number)
     return calcularCurvaS(
@@ -88,7 +92,7 @@ export function useKPIs(
       new Date(y2, m2 - 1, d2),
       config
     )
-  }, [obra, atividades, todosApontamentos, config])
+  }, [enabled, obra, atividades, todosApontamentos, config])
 
   return { resumo, desvios, paralisadas, historicoPorAtividade, itensAtencao, dadosCurvaS }
 }

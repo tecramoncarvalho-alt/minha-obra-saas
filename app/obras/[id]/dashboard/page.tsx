@@ -1,17 +1,19 @@
 'use client';
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import type { ConfigCalendario } from '@/app/calendario';
 import { useDashboardData } from './hooks/useDashboardData';
 import { useKPIs } from './hooks/useKPIs';
 import { useEfetivo } from './hooks/useEfetivo';
-import { SectionAlertas } from './sections/SectionAlertas';
-import { SectionKPIs } from './sections/SectionKPIs';
-import { SectionCurvaS } from './sections/SectionCurvaS';
-import { SectionEfetivo } from './sections/SectionEfetivo';
-import { SectionAtencao } from './sections/SectionAtencao';
-import { ModalRelatorio } from './components/ModalRelatorio';
+import { useRealTimeApontamentos } from './hooks/useRealTimeApontamentos';
+import { useKPIsTemporais } from './hooks/useKPIsTemporais';
+import { TabNavDashboard } from './components/TabNavDashboard';
+import { TabHome } from './tabs/TabHome';
+import { TabPlanejamento } from './tabs/TabPlanejamento';
+import { TabRealTime } from './tabs/TabRealTime';
+import { TabRelatorios } from './tabs/TabRelatorios';
+import type { TabId } from './tabs/types';
 import { hoje, fmtDate, fmtDiaSemana, parseDate } from './utils';
 
 export default function Dashboard() {
@@ -34,11 +36,32 @@ export default function Dashboard() {
     feriados: feriados.map(f => f.data),
   }), [obra, feriados]);
 
+  // ─── Abas + lazy loading ───
+  const [activeTab, setActiveTab] = useState<TabId>('home');
+  const [tabsCarregadas, setTabsCarregadas] = useState<Set<TabId>>(() => new Set<TabId>(['home']));
+
+  const handleTabChange = useCallback((tab: TabId) => {
+    setActiveTab(tab);
+    setTabsCarregadas(prev => {
+      if (prev.has(tab)) return prev;
+      return new Set([...prev, tab]);
+    });
+  }, []);
+
+  const kpisEnabled      = tabsCarregadas.has('home') || tabsCarregadas.has('planejamento');
+  const efetivoEnabled   = tabsCarregadas.has('planejamento');
+  const realtimeEnabled  = tabsCarregadas.has('realtime');
+  const temporaisEnabled = tabsCarregadas.has('home');
+
+  // ─── Hooks (sempre chamados — enabled gatea os useMemo internos) ───
   const { atividadesDoDia, efetivoPorEquipe, equipesAtivas, avancoRealHoje, efetivoRealHoje, atividadesSemApontamento } =
-    useEfetivo(atividadesEfetivas, apontamentosHoje, dataSelecionada);
+    useEfetivo(atividadesEfetivas, apontamentosHoje, dataSelecionada, efetivoEnabled);
 
   const { resumo, desvios, paralisadas, historicoPorAtividade, itensAtencao, dadosCurvaS } =
-    useKPIs(atividadesEfetivas, atividadesDoDia, todosApontamentos, config, dataSelecionada, obra);
+    useKPIs(atividadesEfetivas, atividadesDoDia, todosApontamentos, config, dataSelecionada, obra, kpisEnabled);
+
+  const realTime = useRealTimeApontamentos({ obraId, enabled: realtimeEnabled });
+  const kpisTemporais = useKPIsTemporais({ todosApontamentos, dataSelecionada, enabled: temporaisEnabled });
 
   const isHoje = dataSelecionada === hoje();
 
@@ -54,8 +77,6 @@ export default function Dashboard() {
     router.prefetch(`/obras/${obraId}/apontamentos`);
   }, [obraId, router]);
 
-  const [modalRelatorio, setModalRelatorio] = useState(false);
-
   if (loading) return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50">
       <div className="text-center">
@@ -69,7 +90,7 @@ export default function Dashboard() {
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
       {/* ─── Header ─── */}
       <header className="bg-white border-b border-slate-200 shadow-sm">
-        <div className="max-w-7xl mx-auto px-6 py-4">
+        <div className="px-4 md:px-6 py-4">
           <div className="flex items-center justify-between flex-wrap gap-4">
             <div className="flex items-center gap-4">
               <button onClick={() => router.push(`/obras/${obraId}`)}
@@ -122,7 +143,7 @@ export default function Dashboard() {
                 onChange={e => setDataSelecionada(e.target.value)}
                 className="px-3 py-2 border border-slate-300 rounded-lg text-slate-900 outline-none focus:ring-2 focus:ring-blue-500 text-sm"
               />
-              <div className="text-right">
+              <div className="text-right hidden sm:block">
                 <p className="text-sm font-bold text-slate-900 capitalize">{fmtDiaSemana(dataSelecionada)}</p>
                 <p className="text-xs text-slate-500">{fmtDate(dataSelecionada)}</p>
               </div>
@@ -131,76 +152,68 @@ export default function Dashboard() {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-6 py-8 space-y-8">
-        <SectionAlertas paralisadas={paralisadas} />
+      {/* ─── Body: sidebar + conteúdo da aba ─── */}
+      <div className="flex min-h-[calc(100vh-73px)]">
+        <TabNavDashboard activeTab={activeTab} onTabChange={handleTabChange} />
 
-        <SectionKPIs
-          resumo={resumo}
-          efetivoPorEquipe={efetivoPorEquipe}
-          atividadesEmAndamento={atividadesDoDia.length}
-          equipesAtivas={equipesAtivas}
-          diasRestantes={diasRestantes}
-          obra={obra!}
-          isHoje={isHoje}
-          avancoRealHoje={avancoRealHoje}
-          efetivoRealHoje={efetivoRealHoje}
-          atividadesSemApontamento={atividadesSemApontamento}
-          obraId={obraId}
-          onApontamentosClick={() => router.push(`/obras/${obraId}/apontamentos`)}
-        />
-
-        <SectionCurvaS dados={dadosCurvaS} />
-
-        <SectionEfetivo
-          efetivoPorEquipe={efetivoPorEquipe}
-          atividadesDoDia={atividadesDoDia}
-          apontamentosHoje={apontamentosHoje}
-          desvios={desvios}
-          dataSelecionada={dataSelecionada}
-          isHoje={isHoje}
-        />
-
-        <SectionAtencao
-          itens={itensAtencao}
-          historicoPorAtividade={historicoPorAtividade}
-          hoje={dataSelecionada}
-        />
-
-        {/* ─── Navegação rápida ─── */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <button onClick={() => router.push(`/obras/${obraId}`)}
-            className="bg-white border border-slate-200 rounded-xl p-5 hover:border-blue-300 hover:bg-blue-50 transition-colors text-left">
-            <p className="text-2xl mb-2">🏗️</p>
-            <p className="font-bold text-slate-900">Estrutura da Obra</p>
-            <p className="text-sm text-slate-500 mt-1">Gerenciar pavimentos e blocos</p>
-          </button>
-          <button onClick={() => router.push(`/obras/${obraId}/linha-balanco`)}
-            className="bg-white border border-slate-200 rounded-xl p-5 hover:border-green-300 hover:bg-green-50 transition-colors text-left">
-            <p className="text-2xl mb-2">📊</p>
-            <p className="font-bold text-slate-900">Linha de Balanço</p>
-            <p className="text-sm text-slate-500 mt-1">Visualizar e programar atividades</p>
-          </button>
-          <button onClick={() => setModalRelatorio(true)}
-            className="bg-white border border-slate-200 rounded-xl p-5 hover:border-purple-300 hover:bg-purple-50 transition-colors text-left">
-            <p className="text-2xl mb-2">📈</p>
-            <p className="font-bold text-slate-900">Relatórios</p>
-            <p className="text-sm text-slate-500 mt-1">Exportar por dia, semana ou mês</p>
-          </button>
-        </div>
-      </main>
-
-      <ModalRelatorio
-        aberto={modalRelatorio}
-        onFechar={() => setModalRelatorio(false)}
-        obra={obra!}
-        atividades={atividadesEfetivas}
-        apontamentosHoje={apontamentosHoje}
-        feriados={feriados}
-        versaoSelecionada={versaoSelecionada}
-        modoVersao={modoVersao}
-        dataSelecionada={dataSelecionada}
-        setDataSelecionada={setDataSelecionada}
-      />
+        <main className="flex-1 min-w-0 px-4 md:px-8 py-6 pb-24 md:pb-6">
+          {activeTab === 'home' && (
+            <TabHome
+              resumo={resumo}
+              paralisadas={paralisadas}
+              dadosCurvaS={dadosCurvaS}
+              kpisTemporais={kpisTemporais}
+              obra={obra}
+              diasRestantes={diasRestantes}
+              obraId={obraId}
+              onLinhaBalancoClick={() => router.push(`/obras/${obraId}/linha-balanco`)}
+              onApontamentosClick={() => router.push(`/obras/${obraId}/apontamentos`)}
+            />
+          )}
+          {activeTab === 'planejamento' && (
+            <TabPlanejamento
+              resumo={resumo}
+              efetivoPorEquipe={efetivoPorEquipe}
+              atividadesDoDia={atividadesDoDia}
+              equipesAtivas={equipesAtivas}
+              avancoRealHoje={avancoRealHoje}
+              efetivoRealHoje={efetivoRealHoje}
+              atividadesSemApontamento={atividadesSemApontamento}
+              desvios={desvios}
+              itensAtencao={itensAtencao}
+              historicoPorAtividade={historicoPorAtividade}
+              apontamentosHoje={apontamentosHoje}
+              dataSelecionada={dataSelecionada}
+              isHoje={isHoje}
+              diasRestantes={diasRestantes}
+              obra={obra}
+              obraId={obraId}
+              onApontamentosClick={() => router.push(`/obras/${obraId}/apontamentos`)}
+            />
+          )}
+          {activeTab === 'realtime' && (
+            <TabRealTime
+              apontamentos={realTime.apontamentos}
+              atividadesEfetivas={atividadesEfetivas}
+              loading={realTime.loading}
+              erro={realTime.erro}
+              ultimaAtualizacao={realTime.ultimaAtualizacao}
+              onRefetch={realTime.refetch}
+            />
+          )}
+          {activeTab === 'relatorios' && (
+            <TabRelatorios
+              obra={obra!}
+              atividades={atividadesEfetivas}
+              pavimentos={pavimentos}
+              versaoSelecionada={versaoSelecionada}
+              modoVersao={modoVersao}
+              dataSelecionada={dataSelecionada}
+              setDataSelecionada={setDataSelecionada}
+            />
+          )}
+        </main>
+      </div>
     </div>
   );
 }
