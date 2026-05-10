@@ -1,8 +1,7 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { createClient } from '@/lib/supabase/client'
 import { useAuth } from '@/app/providers'
 import Header from '@/components/Header'
 import type { Role } from '@/app/lib/types'
@@ -12,7 +11,7 @@ interface Membro {
   role: Role
   is_owner: boolean
   created_at: string
-  users: { email: string } | null
+  email: string | null
 }
 
 interface JoinReq {
@@ -20,7 +19,7 @@ interface JoinReq {
   user_id: string
   role: string
   created_at: string
-  users: { email: string } | null
+  email: string | null
 }
 
 const ROLE_LABELS: Record<string, string> = {
@@ -38,9 +37,8 @@ const ROLE_COLORS: Record<string, string> = {
 }
 
 export default function AdminMembrosPage() {
-  const { empresa, role, user, loading: authLoading, isOwner } = useAuth()
+  const { empresa, role, user, loading: authLoading } = useAuth()
   const router = useRouter()
-  const supabase = useMemo(() => createClient(), [])
 
   const [membros, setMembros] = useState<Membro[]>([])
   const [joinRequests, setJoinRequests] = useState<JoinReq[]>([])
@@ -57,30 +55,25 @@ export default function AdminMembrosPage() {
   }, [authLoading, role])
 
   useEffect(() => {
-    if (!authLoading && empresa) { fetchMembros(); fetchJoinRequests() }
-  }, [authLoading, empresa])
+    if (!authLoading) { fetchMembros(); fetchJoinRequests() }
+  }, [authLoading])
 
   const fetchMembros = async () => {
-    if (!empresa) return
     setLoading(true)
-    const { data } = await supabase
-      .from('usuarios_empresas')
-      .select('user_id, role, is_owner, created_at, users:user_id(email)')
-      .eq('empresa_id', empresa.id)
-      .order('created_at')
-    setMembros((data as Membro[]) || [])
+    const res = await fetch('/api/admin/membros')
+    if (res.ok) {
+      const body = await res.json()
+      setMembros(body.membros ?? [])
+    }
     setLoading(false)
   }
 
   const fetchJoinRequests = async () => {
-    if (!empresa) return
-    const { data } = await supabase
-      .from('join_requests')
-      .select('id, user_id, role, created_at, users:user_id(email)')
-      .eq('empresa_id', empresa.id)
-      .eq('status', 'pending')
-      .order('created_at')
-    setJoinRequests((data as JoinReq[]) || [])
+    const res = await fetch('/api/admin/join-requests')
+    if (res.ok) {
+      const body = await res.json()
+      setJoinRequests(body.requests ?? [])
+    }
   }
 
   const handleAlterarRole = async (userId: string, novoRole: string) => {
@@ -112,14 +105,14 @@ export default function AdminMembrosPage() {
 
   const handleConvidar = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!empresa || !email.trim()) return
+    if (!email.trim()) return
     setEnviando(true)
     setMsgConvite(null)
 
     const res = await fetch('/api/invite', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: email.trim(), role: roleConvite, empresa_id: empresa.id }),
+      body: JSON.stringify({ email: email.trim(), role: roleConvite, empresa_id: empresa?.id }),
     })
 
     if (res.ok) {
@@ -159,7 +152,7 @@ export default function AdminMembrosPage() {
               {joinRequests.map(req => (
                 <div key={req.id} className="pt-3 first:pt-0 flex items-center justify-between gap-4 flex-wrap">
                   <div>
-                    <p className="text-sm font-medium text-slate-900">{req.users?.email ?? '(sem email)'}</p>
+                    <p className="text-sm font-medium text-slate-900">{req.email ?? '(sem email)'}</p>
                     <p className="text-xs text-slate-500">Solicitado em {new Date(req.created_at).toLocaleDateString('pt-BR')}</p>
                   </div>
                   <div className="flex items-center gap-2">
@@ -233,7 +226,7 @@ export default function AdminMembrosPage() {
           <h2 className="text-base font-semibold text-slate-900 mb-4">Membros Ativos ({membros.length})</h2>
           <div className="divide-y divide-slate-100">
             {membros.map(m => {
-              const emailMembro = m.users?.email ?? '(sem email)'
+              const emailMembro = m.email ?? '(sem email)'
               const isMe = m.user_id === user?.id
               const canEdit = !isMe && !m.is_owner
               return (
