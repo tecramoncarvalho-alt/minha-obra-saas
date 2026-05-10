@@ -14,7 +14,6 @@ export default function SetupPage() {
   const supabase = useMemo(() => createClient(), [])
   const { empresa, empresaFetched } = useAuth()
 
-  // Se o AuthProvider carregar a empresa enquanto estamos aqui, redireciona
   useEffect(() => {
     if (empresaFetched && empresa) {
       window.location.href = '/'

@@ -6,18 +6,16 @@ import type { User, AuthChangeEvent, Session } from '@supabase/supabase-js'
 import { createClient } from '@/lib/supabase/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ReactQueryDevtools } from '@tanstack/react-query-devtools'
-
-interface Empresa {
-  id: string
-  nome: string
-}
-
-type Role = 'admin' | 'editor' | 'viewer'
+import type { Role, EmpresaDetalhada, Plano } from '@/app/lib/types'
 
 interface AuthContextType {
   user: User | null
-  empresa: Empresa | null
+  empresa: EmpresaDetalhada | null
   role: Role | null
+  isOwner: boolean
+  isSuperAdmin: boolean
+  subscriptionStatus: 'Active' | 'Trial' | 'Past_Due' | null
+  plano: Plano | null
   signOut: () => Promise<void>
   loading: boolean
   empresaFetched: boolean
@@ -27,6 +25,10 @@ const AuthContext = createContext<AuthContextType>({
   user: null,
   empresa: null,
   role: null,
+  isOwner: false,
+  isSuperAdmin: false,
+  subscriptionStatus: null,
+  plano: null,
   signOut: async () => {},
   loading: true,
   empresaFetched: false,
@@ -36,8 +38,8 @@ function makeQueryClient() {
   return new QueryClient({
     defaultOptions: {
       queries: {
-        staleTime: 5 * 60 * 1000,  // 5 min — dados considerados frescos
-        gcTime: 10 * 60 * 1000,    // 10 min — garbage collect após inatividade
+        staleTime: 5 * 60 * 1000,
+        gcTime: 10 * 60 * 1000,
         retry: 1,
         refetchOnWindowFocus: false,
       },
@@ -48,29 +50,31 @@ function makeQueryClient() {
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(makeQueryClient)
   const [user, setUser] = useState<User | null>(null)
-  const [empresa, setEmpresa] = useState<Empresa | null>(null)
+  const [empresa, setEmpresa] = useState<EmpresaDetalhada | null>(null)
   const [role, setRole] = useState<Role | null>(null)
+  const [isOwner, setIsOwner] = useState(false)
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false)
   const [loading, setLoading] = useState(true)
   const [empresaFetched, setEmpresaFetched] = useState(false)
   const router = useRouter()
   const pathname = usePathname()
   const supabase = useMemo(() => createClient(), [])
 
-  // Busca empresa via API server-side (service_role — sem RLS, sem deps de env var no browser)
   const loadEmpresa = async () => {
     try {
       const res = await fetch('/api/me')
       if (!res.ok) {
         console.error('[loadEmpresa] /api/me status:', res.status)
-        return // erro no servidor — não redireciona para /setup
+        return
       }
-      const { empresa: emp, role: r } = await res.json()
-      setEmpresa(emp ?? null)
-      setRole(r ?? null)
+      const data = await res.json()
+      setEmpresa(data.empresa ?? null)
+      setRole(data.role ?? null)
+      setIsOwner(data.isOwner ?? false)
+      setIsSuperAdmin(data.isSuperAdmin ?? false)
       setEmpresaFetched(true)
     } catch {
       console.error('[loadEmpresa] erro de rede ao chamar /api/me')
-      // erro de rede — não redireciona para /setup
     }
   }
 
@@ -97,6 +101,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         } else {
           setEmpresa(null)
           setRole(null)
+          setIsOwner(false)
+          setIsSuperAdmin(false)
           setEmpresaFetched(true)
         }
         setLoading(false)
@@ -105,10 +111,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => { subscription.unsubscribe(); clearTimeout(failsafe) }
   }, [])
 
-  // Redireciona para /setup apenas quando confirmado que não há empresa
   useEffect(() => {
-    if (!loading && empresaFetched && user && !empresa && pathname !== '/setup') {
-      router.replace('/setup')
+    if (!loading && empresaFetched && user && !empresa && !pathname.startsWith('/onboarding')) {
+      router.replace('/onboarding')
     }
   }, [loading, empresaFetched, user, empresa, pathname])
 
@@ -117,9 +122,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     router.push('/login')
   }
 
+  const subscriptionStatus = empresa?.subscription_status ?? null
+  const plano = empresa?.plano ?? null
+
   return (
     <QueryClientProvider client={queryClient}>
-      <AuthContext.Provider value={{ user, empresa, role, signOut, loading, empresaFetched }}>
+      <AuthContext.Provider value={{
+        user, empresa, role, isOwner, isSuperAdmin,
+        subscriptionStatus, plano,
+        signOut, loading, empresaFetched,
+      }}>
         {children}
       </AuthContext.Provider>
       {process.env.NODE_ENV === 'development' && <ReactQueryDevtools initialIsOpen={false} />}

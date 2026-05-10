@@ -2,6 +2,7 @@ import { createServerClient } from '@supabase/ssr'
 import { createClient } from '@supabase/supabase-js'
 import { NextRequest, NextResponse } from 'next/server'
 import { cookies } from 'next/headers'
+import { createAuditLog } from '@/app/lib/audit'
 
 export async function POST(request: NextRequest) {
   const { email, role, empresa_id } = await request.json()
@@ -55,6 +56,15 @@ export async function POST(request: NextRequest) {
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
+
+  await createAuditLog({
+    actorId: user.id,
+    targetType: 'membro',
+    targetId: email,
+    action: 'invite_sent',
+    details: { role },
+    empresaId: empresa_id,
+  })
 
   return NextResponse.json({ success: true })
 }

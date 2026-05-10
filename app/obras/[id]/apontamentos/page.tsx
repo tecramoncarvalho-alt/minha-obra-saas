@@ -394,7 +394,7 @@ export default function ApontamentosPage() {
     )
   }
 
-  const podeEditar = role === 'admin' || role === 'editor'
+  const podeEditar = role === 'admin' || role === 'planejador' || role === 'operator'
 
   // ─── Card de atividade ───────────────────────────────────────────────────────
 

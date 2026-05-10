@@ -19,7 +19,7 @@ interface Obra {
 
 export default function Home() {
   const router = useRouter();
-  const { empresa, loading: authLoading, empresaFetched } = useAuth();
+  const { empresa, loading: authLoading, empresaFetched, plano, subscriptionStatus, role } = useAuth();
   const [obras, setObras] = useState<Obra[]>([]);
   const [loading, setLoading] = useState(false);
   const [formData, setFormData] = useState({
@@ -55,9 +55,13 @@ export default function Home() {
     setFormData(prev => ({ ...prev, [e.target.name]: e.target.value }));
   };
 
+  const podeOperarPlano = subscriptionStatus !== 'Past_Due';
+  const dentroLimiteObras = !plano || obras.length < plano.max_projects;
+  const podeAdicionarObra = podeOperarPlano && dentroLimiteObras && (role === 'admin' || role === 'planejador');
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!empresa) return;
+    if (!empresa || !podeAdicionarObra) return;
     setSubmitting(true);
     const { data, error } = await supabase.from('obras').insert([{
       nome: formData.nome,
@@ -92,6 +96,25 @@ export default function Home() {
           <div className="lg:col-span-1">
             <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
               <h2 className="text-lg font-semibold text-slate-900 mb-5">🆕 Nova Obra</h2>
+
+              {subscriptionStatus === 'Past_Due' && (
+                <div className="mb-4 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                  <p className="text-red-700 text-xs font-semibold">Pagamento pendente — criação bloqueada.</p>
+                </div>
+              )}
+              {!dentroLimiteObras && subscriptionStatus !== 'Past_Due' && (
+                <div className="mb-4 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  <p className="text-amber-700 text-xs font-semibold">
+                    Limite de {plano?.max_projects} obras atingido. Faça upgrade para continuar.
+                  </p>
+                </div>
+              )}
+              {role !== 'admin' && role !== 'planejador' && (
+                <div className="mb-4 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+                  <p className="text-slate-500 text-xs">Apenas administradores e planejadores podem criar obras.</p>
+                </div>
+              )}
+
               <form onSubmit={handleSubmit} className="space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Nome *</label>
@@ -115,7 +138,7 @@ export default function Home() {
                   <input type="date" name="data_fim" value={formData.data_fim} onChange={handleInputChange}
                     className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-slate-900" />
                 </div>
-                <button type="submit" disabled={submitting || !formData.nome}
+                <button type="submit" disabled={submitting || !formData.nome || !podeAdicionarObra}
                   className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-semibold py-2 px-4 rounded-lg transition-colors">
                   {submitting ? '⏳ Criando...' : '✨ Criar Obra'}
                 </button>

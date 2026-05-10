@@ -181,3 +181,43 @@ export interface Dependencia {
   sucessora_id: number;
   lag_dias: number;
 }
+
+// ============================================
+// MULTI-TENANT / RBAC
+// ============================================
+
+export type Role = 'admin' | 'planejador' | 'operator' | 'viewer'
+
+export interface Plano {
+  id: string
+  nome: string
+  max_users: number
+  max_projects: number
+  storage_limit: number
+  features_enabled: string[]
+  ativo: boolean
+}
+
+export interface EmpresaDetalhada {
+  id: string
+  nome: string
+  codigo_empresa: string | null
+  cnpj: string | null
+  endereco: string | null
+  foto_logo_url: string | null
+  email_cadastro: string | null
+  email_recuperacao: string | null
+  subscription_status: 'Active' | 'Trial' | 'Past_Due' | null
+  expires_at: string | null
+  plano: Plano | null
+}
+
+export interface JoinRequest {
+  id: string
+  user_id: string
+  empresa_id: string
+  status: 'pending' | 'approved' | 'rejected'
+  role: 'planejador' | 'operator' | 'viewer'
+  created_at: string
+  updated_at: string
+}

@@ -99,6 +99,9 @@ export async function POST(
   const auth = await getUserAndRole(supabase, obraId)
   if (!auth) return NextResponse.json({ error: 'Não autenticado.' }, { status: 401 })
   if (auth.role === 'viewer') return NextResponse.json({ error: 'Sem permissão.' }, { status: 403 })
+  if (auth.role !== 'admin' && auth.role !== 'planejador' && auth.role !== 'operator') {
+    return NextResponse.json({ error: 'Sem permissão.' }, { status: 403 })
+  }
 
   const body = await request.json()
   const result = ApontamentoDiarioSchema.safeParse(body)
