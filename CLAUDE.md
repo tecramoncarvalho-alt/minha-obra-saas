@@ -56,31 +56,67 @@ plansaas/
 │   ├── page.tsx                      # Home: lista e criação de obras
 │   ├── login/page.tsx                # Login email+senha e Google OAuth
 │   ├── signup/page.tsx               # Cadastro com confirmação por email
-│   ├── setup/page.tsx                # Primeiro acesso: criar empresa
+│   ├── setup/page.tsx                # Legado — redireciona para /onboarding/criar
 │   ├── auth/callback/route.ts        # Callback PKCE (code) e OTP (token_hash)
+│   ├── onboarding/
+│   │   ├── page.tsx                  # Seleção: Criar Empresa / Entrar em Empresa
+│   │   ├── criar/page.tsx            # Form de criação: nome, CNPJ, endereço, email
+│   │   └── buscar/page.tsx           # Buscar empresa por código de 8 dígitos + solicitar acesso
+│   ├── admin/
+│   │   ├── empresa/page.tsx          # Dados da empresa, plano, código, editar, deletar (is_owner)
+│   │   └── membros/page.tsx          # Membros ativos, solicitações pendentes, convidar por email
+│   ├── super-admin/
+│   │   ├── layout.tsx                # Guard server-side: redireciona não-super-admins para /
+│   │   ├── page.tsx                  # Dashboard global: totais, status breakdown
+│   │   ├── empresas/page.tsx         # Listar + alterar plano/status/expires_at
+│   │   ├── planos/page.tsx           # CRUD de planos
+│   │   ├── usuarios/page.tsx         # Todos os usuários do sistema
+│   │   └── logs/page.tsx             # audit_logs com filtro por ação
 │   ├── api/
-│   │   ├── me/route.ts                               # GET: usuário + empresa (service_role, sem RLS)
-│   │   ├── invite/route.ts                           # POST: convite de membro via service role
-│   │   ├── empresa/[id]/storage-quota/route.ts       # GET: quota de storage da empresa
-│   │   ├── medicoes/upload/route.ts                  # POST: upload foto (magic bytes, máx 1MB, vincula apontamento_id)
+│   │   ├── me/route.ts               # GET: usuário + empresa + isOwner + isSuperAdmin + plano
+│   │   ├── invite/route.ts           # POST: convite de membro via service role
+│   │   ├── empresa/[id]/storage-quota/route.ts
+│   │   ├── medicoes/upload/route.ts  # POST: upload foto (magic bytes, máx 1MB, vincula apontamento_id)
+│   │   ├── onboarding/
+│   │   │   ├── criar/route.ts        # POST: cria empresa + is_owner + audit_log
+│   │   │   └── buscar/route.ts       # GET: busca por codigo_empresa | POST: cria join_request
+│   │   ├── admin/
+│   │   │   ├── empresa/route.ts      # PATCH: editar | DELETE: deletar empresa (is_owner)
+│   │   │   ├── membros/route.ts      # GET: lista membros com emails via service_role
+│   │   │   ├── membros/[userId]/role/route.ts  # PATCH: alterar role
+│   │   │   └── join-requests/
+│   │   │       ├── route.ts          # GET: solicitações pendentes com emails
+│   │   │       └── [id]/route.ts     # PATCH: aprovar/rejeitar
+│   │   ├── super-admin/
+│   │   │   ├── check/route.ts        # GET: { isSuperAdmin }
+│   │   │   ├── empresas/route.ts     # GET: todas as empresas
+│   │   │   ├── empresas/[id]/route.ts # PATCH: plano/status | DELETE
+│   │   │   ├── planos/route.ts       # GET all + POST create
+│   │   │   ├── planos/[id]/route.ts  # PATCH + DELETE
+│   │   │   ├── usuarios/route.ts     # GET: todos usuários com emails via listUsers()
+│   │   │   └── logs/route.ts         # GET: audit_logs com emails via listUsers()
 │   │   └── obras/[id]/
 │   │       ├── apontamentos/route.ts                 # GET (filtros data/range) + POST
 │   │       └── apontamentos/[apontamentoId]/route.ts # PUT + DELETE
-│   ├── configuracoes/equipe/page.tsx # Gestão de membros (admin only)
+│   ├── configuracoes/equipe/page.tsx # Redirect 301 → /admin/membros
 │   ├── lib/
-│   │   ├── types.ts                  # Interfaces centralizadas (Obra, Atividade, ApontamentoDiario, …)
+│   │   ├── types.ts                  # Interfaces centralizadas (Role, EmpresaDetalhada, Plano, …)
 │   │   ├── schemas.ts                # Validações Zod (ApontamentoDiarioSchema, MedicaoSchema)
 │   │   ├── calculador-avanco.ts      # Funções puras: desvio, CurvaS, deltaEfetivo, resumoObra
 │   │   ├── apontamentos.ts           # Helpers de BD: getApontamentosDoDia, atualizarApontamento, …
-│   │   ├── upload-helper.ts          # uploadFotoComRetry: compressão + retry exponencial (até 3 tentativas)
-│   │   └── query-hooks.ts            # React Query hooks: useStorageQuota, useApontamentosHoje
+│   │   ├── upload-helper.ts          # uploadFotoComRetry: compressão + retry exponencial
+│   │   ├── query-hooks.ts            # React Query hooks: useStorageQuota, useApontamentosHoje
+│   │   ├── super-admin.ts            # isSuperAdmin(userId) — usa service_role, queries system_admins
+│   │   └── audit.ts                  # createAuditLog() — insert em audit_logs via service_role
 │   └── obras/[id]/
-│       ├── page.tsx                  # Config da obra: pavimentos, feriados, foto
+│       ├── page.tsx                  # Config da obra (guards: admin/planejador apenas podem editar)
 │       ├── linha-balanco/
 │       │   ├── page.tsx              # Orquestrador (~1370 linhas)
+│       │   │                         # podeEditar = role admin|planejador
+│       │   │                         # modoLeitura = Definitiva OU !podeEditar
 │       │   ├── utils/
-│       │   │   ├── geradorCores.ts   # PALETTE, getCor, getCorSub, calcDuracaoTotal
-│       │   │   └── helpers.ts        # fmtDate, gerarUUID
+│       │   │   ├── geradorCores.ts
+│       │   │   └── helpers.ts
 │       │   ├── hooks/
 │       │   │   ├── useCalendarioAtividades.ts
 │       │   │   ├── useAtividades.ts
@@ -88,39 +124,44 @@ plansaas/
 │       │   │   ├── useDragAndDrop.ts
 │       │   │   └── useConflitos.ts
 │       │   └── components/
-│       │       ├── GraficoLinhaBalanco.tsx  # Grid + barras (normal E tela cheia)
-│       │       │                            # Props: mostrarAvancoReal + progrealPorAtividade
+│       │       ├── GraficoLinhaBalanco.tsx
 │       │       ├── BarraAtividade.tsx
 │       │       ├── CalendarioHeader.tsx
 │       │       ├── SVGVinculos.tsx
 │       │       ├── LegendaCores.tsx
-│       │       ├── ToolbarSuperior.tsx      # Zoom + filtros + toggle Avanço Real + imprimir
-│       │       ├── HeaderLinhaBalanco.tsx
-│       │       ├── BannersLinhaBalanco.tsx
+│       │       ├── ToolbarSuperior.tsx
+│       │       ├── HeaderLinhaBalanco.tsx  # prop podeEditar oculta "Salvar Versão"
+│       │       ├── BannersLinhaBalanco.tsx # prop podeEditar diferencia banners
 │       │       ├── ContextMenu.tsx
 │       │       ├── TooltipAtividade.tsx
 │       │       ├── TelaCheia.tsx
 │       │       └── modais/ (9 modais)
 │       ├── dashboard/
-│       │   ├── page.tsx              # Orquestrador do dashboard (~1100 linhas)
-│       │   └── components/
-│       │       ├── KpiCards.tsx         # % conclusão, desvio, aderência, críticas
-│       │       ├── AlertasParalisadas.tsx
-│       │       ├── GridEfetivo.tsx      # Previsto vs real + barras duplas
-│       │       ├── CurvaS.tsx           # AreaChart (Recharts)
-│       │       ├── RowHighlight.tsx     # Linha reutilizável c/ desvio, delta, status
-│       │       └── TabelaAtencao.tsx    # Filtros automáticos + drawer histórico
+│       │   ├── page.tsx
+│       │   ├── hooks/
+│       │   │   ├── useDashboardData.ts
+│       │   │   ├── useKPIs.ts
+│       │   │   ├── useEfetivo.ts
+│       │   │   ├── useRealTimeApontamentos.ts  # polling 30s; retorna data.apontamentos do JSON
+│       │   │   └── useKPIsTemporais.ts
+│       │   ├── tabs/
+│       │   │   ├── TabHome.tsx
+│       │   │   ├── TabPlanejamento.tsx
+│       │   │   ├── TabRealTime.tsx       # Apontamentos do dia em tempo real
+│       │   │   └── TabRelatorios.tsx
+│       │   ├── sections/ (SectionAlertas, SectionKPIs, SectionEfetivo, SectionAtencao, SectionCurvaS)
+│       │   └── components/ (KpiCards, AlertasParalisadas, GridEfetivo, CurvaS, RowHighlight, TabelaAtencao, …)
 │       ├── apontamentos/
-│       │   ├── page.tsx              # Mobile-first, accordion, React Query, upload staged, atrasadas
+│       │   ├── page.tsx              # Multi-card accordion, "Salvar tudo" flutuante, upload staged
+│       │   │                         # podeEditar = role admin|planejador|operator
 │       │   └── components/
-│       │       └── UploadFoto.tsx    # Componente de upload staged: preview local → upload ao salvar
-│       ├── criacao-em-lote/page.tsx  # Wizard de criação de blocos e pavimentos
-│       └── editar-bloco/[bloco]/page.tsx
-│           pavimentos/[pavimentoId]/page.tsx
+│       │       └── UploadFoto.tsx
+│       ├── criacao-em-lote/page.tsx  # Redirect se role viewer/operator
+│       └── editar-bloco/[bloco]/page.tsx  # Redirect se role viewer/operator
 ├── components/
-│   └── Header.tsx                    # Header global: logo, empresa, role, logout
+│   └── Header.tsx
 ├── lib/
-│   └── supabase/client.ts            # Singleton browser client (createBrowserClient)
+│   └── supabase/client.ts
 ├── __tests__/
 │   └── calculadorAvanco.test.ts      # 17 testes Vitest
 └── vitest.config.ts
@@ -130,10 +171,11 @@ plansaas/
 
 1. `proxy.ts` intercepta todas as requisições (exceto `_next/*`, assets estáticos) — usa `getSession()` (cookie local, sem rede)
 2. Rotas públicas: `/login`, `/signup`, `/auth/callback`
-3. Usuário autenticado sem empresa → redirecionado para `/setup`
+3. Usuário autenticado sem empresa → redirecionado para `/onboarding`
 4. `AuthProvider` em `providers.tsx` carrega empresa via `/api/me` (server-side, service_role, sem RLS)
-5. `useAuth()` expõe `{ user, empresa, role, loading, empresaFetched }` globalmente
-6. Após criar empresa em `/setup`: redireciona via `window.location.href = '/'` (hard reload — reinicializa AuthProvider)
+5. `useAuth()` expõe `{ user, empresa, role, isOwner, isSuperAdmin, subscriptionStatus, plano, loading, empresaFetched }` globalmente
+6. Após criar empresa em `/onboarding/criar`: redireciona via `window.location.href = '/'` (hard reload — reinicializa AuthProvider)
+7. Super Admin: acesso a `/super-admin/*` verificado via `isSuperAdmin(userId)` em cada API route e no layout server-side
 
 ### Cliente Supabase
 
@@ -171,11 +213,38 @@ plansaas/
 ## Schema do Banco
 
 ```sql
+-- Planos de assinatura
+planos (id uuid PK, nome text, max_users int, max_projects int,
+        storage_limit bigint, features_enabled jsonb, ativo bool, created_at)
+
 -- Multi-tenancy
-empresas          (id uuid PK, nome text, created_at)
+empresas          (id uuid PK, nome text,
+                   codigo_empresa text UNIQUE,  -- 8 dígitos, gerado no onboarding
+                   cnpj text, endereco text, foto_logo_url text,
+                   email_cadastro text, email_recuperacao text,
+                   plan_id uuid FK planos,
+                   subscription_status text CHECK('Active','Trial','Past_Due') DEFAULT 'Trial',
+                   expires_at timestamptz,
+                   created_at)
+
 usuarios_empresas (user_id uuid FK auth.users, empresa_id uuid FK empresas,
-                   role text CHECK('admin','editor','viewer'),
+                   role text CHECK('admin','planejador','operator','viewer'),
+                   is_owner bool DEFAULT false,
                    created_at, UNIQUE(user_id, empresa_id))
+
+-- Super Admin
+system_admins (id uuid PK, user_id uuid FK auth.users UNIQUE, created_at)
+
+-- Solicitações de acesso
+join_requests (id uuid PK, user_id uuid FK auth.users, empresa_id uuid FK empresas,
+               status text CHECK('pending','approved','rejected') DEFAULT 'pending',
+               role text CHECK('planejador','operator','viewer') DEFAULT 'viewer',
+               created_at, updated_at, UNIQUE(user_id, empresa_id))
+
+-- Auditoria
+audit_logs (id uuid PK, actor_id uuid FK auth.users, target_type text,
+            target_id text, action text, details jsonb DEFAULT '{}',
+            empresa_id uuid FK empresas, created_at)
 
 -- Obras
 obras      (id bigint PK, empresa_id uuid FK empresas,
@@ -280,6 +349,24 @@ Todas as funções são **puras** (sem side effects, testáveis) e recebem `conf
 
 ## Regras de Negócio Críticas
 
+### RBAC (4 roles)
+
+| Ação | viewer | operator | planejador | admin |
+|------|:------:|:--------:|:----------:|:-----:|
+| Ler dados | ✅ | ✅ | ✅ | ✅ |
+| Apontamentos (criar/editar) | ❌ | ✅ | ✅ | ✅ |
+| Criar/editar obras e atividades | ❌ | ❌ | ✅ | ✅ |
+| Arrastar linha de balanço | ❌ | ❌ | ✅ | ✅ |
+| Gerenciar membros | ❌ | ❌ | ❌ | ✅ |
+| Deletar empresa | ❌ | ❌ | ❌ | ✅ (is_owner) |
+
+- **`podeEditar`** na linha de balanço = `role === 'admin' || role === 'planejador'`. Quando falso, `modoLeitura` é forçado (sem drag, sem context menu, sem salvar versão).
+- **`podeEditar`** em apontamentos = `role === 'admin' || role === 'planejador' || role === 'operator'`
+- **`is_owner`**: apenas um membro por empresa. Não pode ter sua role alterada nem ser removido. Único que pode deletar a empresa.
+- **emails de membros**: nunca buscar via `users:user_id(email)` do PostgREST — `auth.users` está no schema `auth`, invisível à API pública. Usar `admin.auth.admin.listUsers()` com service_role e mapear emails via `Map`.
+
+### Domínio
+
 - **Dias úteis**: `duracao_dias` de atividades e subatividades é sempre em **dias úteis**. Nunca usar diferença de dias corridos em nenhum cálculo de prazo.
 - **Configuração por obra**: `sabado_util` e `domingo_util` são configurados individualmente em cada obra
 - **Feriados por obra**: tabela `feriados` vinculada à obra, não global
@@ -334,6 +421,8 @@ Variáveis de ambiente ficam em `.env.local` (não commitado).
 - **Não usar shadcn/ui** ou qualquer biblioteca de componentes — Tailwind puro
 - **Não usar Recharts** fora de `CurvaS.tsx` — é dependência pesada, circunscrita ao dashboard
 - **Não implementar lógica de desvio inline** nas páginas — usar `app/lib/calculador-avanco.ts`
+- **Não usar `users:user_id(email)` em joins PostgREST** — `auth.users` é inacessível via API pública; usar `admin.auth.admin.listUsers()` com service_role
+- **Não omitir `type="button"`** em botões dentro de componentes — o padrão HTML é `type="submit"`, que pode causar submit acidental se houver um `<form>` ancestral
 
 ---
 
@@ -415,6 +504,60 @@ Variáveis de ambiente ficam em `.env.local` (não commitado).
 **Etapa 8 — Atividades em Atenção**
 - `dashboard/components/RowHighlight.tsx`: linha reutilizável com desvio, delta, status badge
 - `dashboard/components/TabelaAtencao.tsx`: filtros automáticos (desvio > 10%, prazo vencido, PARALISADA) + drawer lateral de histórico
+
+---
+
+### 2026-05-10 — Multi-Tenant RBAC, Onboarding, Admin Panel e Super Admin
+
+**Motivação**: transformar o produto em plataforma SaaS completa com controle de acesso por papel, licenciamento, auditoria e painel administrativo global.
+
+**Banco de dados (executado via Supabase SQL Editor)**
+- Tabela `planos` (Free / Pro / Enterprise) com limites de usuários, obras e storage
+- Tabela `system_admins` — lista de super admins do sistema
+- Tabela `join_requests` — solicitações de entrada em empresa com status pending/approved/rejected
+- Tabela `audit_logs` — log imutável de ações: create, update, delete, role_change, invite_sent, member_added, plan_change, status_change
+- `empresas` expandida: `codigo_empresa` (8 dígitos únicos), `cnpj`, `endereco`, `foto_logo_url`, `subscription_status`, `plan_id`, `expires_at`
+- `usuarios_empresas` expandida: `is_owner`, role migrado de `editor` → `planejador`, novo valor `operator`
+- RLS policies para `join_requests`, `audit_logs`, `system_admins`
+- Função `user_role_in_empresa(uuid)` SECURITY DEFINER para uso em policies
+
+**Camada Auth**
+- `app/lib/types.ts`: `Role = 'admin'|'planejador'|'operator'|'viewer'`, interfaces `Plano`, `EmpresaDetalhada`
+- `app/api/me/route.ts`: expandido com `isOwner`, `isSuperAdmin`, `plano`
+- `app/providers.tsx`: contexto expandido com `isOwner`, `isSuperAdmin`, `subscriptionStatus`, `plano`; redirect para `/onboarding` ao invés de `/setup`
+- `app/lib/super-admin.ts`: `isSuperAdmin(userId)` — verificação via service_role, sem exposição ao browser
+- `app/lib/audit.ts`: `createAuditLog()` — insert em audit_logs via service_role
+
+**Onboarding**
+- `app/onboarding/page.tsx`: 2 opções — Criar Empresa / Entrar em Empresa
+- `app/onboarding/criar/page.tsx` + `app/api/onboarding/criar/route.ts`: cria empresa com `codigo_empresa` único, marca `is_owner=true`, grava audit_log
+- `app/onboarding/buscar/page.tsx` + `app/api/onboarding/buscar/route.ts`: busca empresa por código de 8 dígitos, cria `join_request`
+
+**Admin Panel**
+- `app/admin/empresa/page.tsx`: exibe `codigo_empresa` copiável, plano, status; edição de dados; botão deletar (só is_owner)
+- `app/admin/membros/page.tsx`: membros ativos (alterar role), solicitações pendentes (aprovar/rejeitar + escolher role), convidar por email
+- `app/api/admin/empresa/route.ts`: PATCH + DELETE com guards
+- `app/api/admin/membros/route.ts` + `app/api/admin/membros/[userId]/role/route.ts`: emails via `listUsers()`
+- `app/api/admin/join-requests/route.ts` + `[id]/route.ts`: emails via `listUsers()`, approve/reject
+
+**Super Admin Panel**
+- `app/super-admin/layout.tsx`: guard server-side — redireciona para `/` se não for super admin
+- Dashboard, Empresas, Planos, Usuários, Logs — todos com guard `isSuperAdmin`
+- Emails de usuários via `admin.auth.admin.listUsers()` (não via join PostgREST)
+
+**RBAC Guards**
+- `linha-balanco/page.tsx`: `podeEditar = role admin|planejador`; `modoLeitura` unificado bloqueia drag, context menu e salvar versão para viewer/operator
+- `BannersLinhaBalanco.tsx` + `HeaderLinhaBalanco.tsx`: prop `podeEditar` diferencia mensagem e oculta botões
+- `obras/[id]/page.tsx`: editar obra, estrutura, feriados e foto bloqueados para viewer/operator
+- `criacao-em-lote` + `editar-bloco`: redirect para `/obras/${obraId}` se não for admin/planejador
+- `apontamentos/page.tsx`: `podeEditar = admin|planejador|operator`; viewer vê "somente leitura"
+- API `/api/obras/[id]/apontamentos`: POST/PUT retorna 403 para viewer
+
+**Correções pontuais**
+- `print-color-adjust: exact` adicionado ao print da linha de balanço (blocos coloridos aparecem no PDF)
+- Apontamentos: multi-card accordion, "Salvar tudo" flutuante, foto marca `formsModificados`
+- Botão Voltar em apontamentos agora vai para o dashboard da obra (não para `/`)
+- `useRealTimeApontamentos`: corrigido parse da resposta — API retorna `{ apontamentos }`, não array direto
 
 ---
 
