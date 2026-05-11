@@ -118,7 +118,7 @@ export async function salvarApontamento(
   apontamento: Omit<ApontamentoDiario, 'id' | 'created_at' | 'updated_at'>,
   userRole: string
 ): Promise<ApontamentoDiario> {
-  assertRole(userRole, ['admin', 'editor'])
+  assertRole(userRole, ['admin', 'planejador', 'operator'])
   assertPercentual(apontamento.percentual_executado)
   assertEfetivo(apontamento.efetivo_real)
   assertDataNaoFutura(apontamento.data)
@@ -144,7 +144,7 @@ export async function atualizarApontamento(
   updates: Partial<ApontamentoDiario>,
   userRole: string
 ): Promise<ApontamentoDiario> {
-  assertRole(userRole, ['admin', 'editor'])
+  assertRole(userRole, ['admin', 'planejador', 'operator'])
   if (updates.percentual_executado !== undefined) assertPercentual(updates.percentual_executado)
   if (updates.efetivo_real !== undefined) assertEfetivo(updates.efetivo_real)
   if (updates.data) assertDataNaoFutura(updates.data)

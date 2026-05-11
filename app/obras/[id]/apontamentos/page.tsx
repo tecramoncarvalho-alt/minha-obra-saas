@@ -1,6 +1,6 @@
 'use client'
 
-import { Fragment, useState, useEffect, useCallback } from 'react'
+import { Fragment, useState, useEffect, useCallback, useRef } from 'react'
 import Image from 'next/image'
 import { useParams, useRouter } from 'next/navigation'
 import { useQueryClient } from '@tanstack/react-query'
@@ -11,6 +11,9 @@ import { ApontamentoDiarioSchema } from '@/app/lib/schemas'
 import UploadFoto from './components/UploadFoto'
 import { uploadFotoComRetry } from '@/app/lib/upload-helper'
 import { useStorageQuota, useApontamentosHoje } from '@/app/lib/query-hooks'
+import { useOnlineStatus } from '@/app/hooks/useOnlineStatus'
+import { db } from '@/app/lib/offline-db'
+import { sincronizarPendentes, contarPendentes, resolverConflito, type ConflictInfo } from '@/app/lib/sync'
 
 interface Obra { id: number; nome: string }
 interface Atividade {
@@ -99,6 +102,8 @@ export default function ApontamentosPage() {
   const { empresa, role, loading: authLoading } = useAuth()
 
   const queryClient = useQueryClient()
+  const isOnline = useOnlineStatus()
+  const wasOfflineRef = useRef(false)
 
   const [obra, setObra] = useState<Obra | null>(null)
   const [atividades, setAtividades] = useState<Atividade[]>([])
@@ -127,6 +132,9 @@ export default function ApontamentosPage() {
   const [uploadProgresso, setUploadProgresso] = useState<Record<number, number>>({})
   const [uploadErroMsg, setUploadErroMsg] = useState<Record<number, string>>({})
   const [fotoUrls, setFotoUrls] = useState<Record<number, string>>({})
+
+  const [pendentesCount, setPendentesCount] = useState(0)
+  const [conflitoPendente, setConflitoPendente] = useState<ConflictInfo | null>(null)
 
   const addToast = useCallback((tipo: 'sucesso' | 'erro', texto: string) => {
     const toastId = ++toastCounter
@@ -273,6 +281,27 @@ export default function ApontamentosPage() {
     })
   }, [apontamentosHoje, apontamentosCarregados, atividades])
 
+  // Sync ao reconectar + atualiza contador de pendentes
+  useEffect(() => {
+    contarPendentes(obraId).then(setPendentesCount).catch(() => null)
+  }, [obraId, formsModificados])
+
+  useEffect(() => {
+    if (isOnline && wasOfflineRef.current && pendentesCount > 0) {
+      sincronizarPendentes(obraId, setConflitoPendente).then(result => {
+        if (result.sincronizados > 0) {
+          addToast('sucesso', `${result.sincronizados} apontamento${result.sincronizados > 1 ? 's' : ''} sincronizado${result.sincronizados > 1 ? 's' : ''}!`)
+          void queryClient.invalidateQueries({ queryKey: ['apontamentos', obraId, hoje()] })
+          contarPendentes(obraId).then(setPendentesCount).catch(() => null)
+        }
+        if (result.conflitos > 0) {
+          addToast('erro', `${result.conflitos} conflito${result.conflitos > 1 ? 's' : ''} detectado${result.conflitos > 1 ? 's' : ''} — verifique abaixo.`)
+        }
+      }).catch(() => null)
+    }
+    wasOfflineRef.current = !isOnline
+  }, [isOnline, obraId, pendentesCount, queryClient, addToast])
+
   const toggleCard = (id: number) => {
     setExpandidosCards(prev => {
       const next = new Set(prev)
@@ -305,6 +334,34 @@ export default function ApontamentosPage() {
     if (!validarApontamento(atividadeId)) return false
     const form = forms[atividadeId]
     if (!form) return false
+
+    // Modo offline: persiste no IndexedDB
+    if (!isOnline) {
+      const arquivo = arquivosPendentes[atividadeId]
+      let arquivoBase64: string | undefined
+      let arquivoMime: string | undefined
+      let arquivoNome: string | undefined
+      if (arquivo) {
+        const buf = await arquivo.arrayBuffer()
+        arquivoBase64 = btoa(String.fromCharCode(...new Uint8Array(buf)))
+        arquivoMime = arquivo.type
+        arquivoNome = arquivo.name
+      }
+      await db.pendingApontamentos.add({
+        obraId,
+        atividadeId,
+        data: hoje(),
+        ...form,
+        arquivoBase64,
+        arquivoMime,
+        arquivoNome,
+        createdAt: Date.now(),
+        tentativas: 0,
+      })
+      setFormsModificados(prev => { const n = new Set(prev); n.delete(atividadeId); return n })
+      setPendentesCount(prev => prev + 1)
+      return true
+    }
 
     const res = await fetch(`/api/obras/${obraId}/apontamentos`, {
       method: 'POST',
@@ -358,8 +415,6 @@ export default function ApontamentosPage() {
       const ok = await salvarUm(id)
       ok ? salvos++ : erros++
     }
-    void queryClient.invalidateQueries({ queryKey: ['apontamentos', obraId, hoje()] })
-    if (empresa) void queryClient.invalidateQueries({ queryKey: ['quota', empresa.id] })
     setSalvandoTodos(false)
     if (salvos > 0) addToast('sucesso', `${salvos} apontamento${salvos > 1 ? 's' : ''} salvo${salvos > 1 ? 's' : ''}!`)
     if (erros > 0) addToast('erro', `${erros} apontamento${erros > 1 ? 's' : ''} com erro.`)
@@ -444,12 +499,12 @@ export default function ApontamentosPage() {
             <div className="flex items-center gap-2 flex-wrap">
               <h3 className="text-lg font-semibold text-gray-900 leading-snug">{at.nome}</h3>
               {atrasada && (
-                <span className="text-xs font-medium bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full shrink-0">
+                <span className="text-xs font-medium bg-orange-100 text-orange-700 px-2 py-1 rounded-full shrink-0">
                   Atrasada
                 </span>
               )}
               {modificado && (
-                <span className="text-xs font-medium bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full shrink-0">
+                <span className="text-xs font-medium bg-blue-100 text-blue-700 px-2 py-1 rounded-full shrink-0">
                   Editado
                 </span>
               )}
@@ -596,15 +651,79 @@ export default function ApontamentosPage() {
   return (
     <div className="min-h-screen bg-slate-50 pb-32">
 
+      {/* Banner offline */}
+      {!isOnline && (
+        <div className="fixed top-0 left-0 right-0 z-[60] bg-amber-500 text-white text-sm font-semibold text-center py-2 px-4 flex items-center justify-center gap-2">
+          <span>📡 Sem conexão — apontamentos serão salvos localmente</span>
+          {pendentesCount > 0 && (
+            <span className="bg-white text-amber-700 text-xs font-bold px-2 py-0.5 rounded-full">{pendentesCount}</span>
+          )}
+        </div>
+      )}
+
+      {/* Modal de conflito */}
+      {conflitoPendente && (
+        <div className="fixed inset-0 z-[70] bg-black/50 flex items-center justify-center px-4">
+          <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-2xl">
+            <h3 className="text-base font-bold text-gray-900 mb-2">Conflito detectado</h3>
+            <p className="text-sm text-gray-600 mb-4">
+              Este apontamento foi alterado por outro usuário enquanto você estava sem conexão. O que deseja fazer?
+            </p>
+            <pre className="text-xs bg-gray-50 rounded-lg p-3 mb-4 overflow-auto max-h-32">
+              {JSON.stringify(conflitoPendente.serverVersion, null, 2)}
+            </pre>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  resolverConflito(conflitoPendente.localId, 'descartar').then(() => {
+                    setConflitoPendente(null)
+                    contarPendentes(obraId).then(setPendentesCount).catch(() => null)
+                  }).catch(() => null)
+                }}
+                className="flex-1 py-2.5 border border-gray-300 rounded-xl text-sm font-semibold text-gray-700"
+              >
+                Descartar minha versão
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  resolverConflito(conflitoPendente.localId, 'sobrescrever').then(() => {
+                    setConflitoPendente(null)
+                    return sincronizarPendentes(obraId)
+                  }).then(() => {
+                    void queryClient.invalidateQueries({ queryKey: ['apontamentos', obraId, hoje()] })
+                    contarPendentes(obraId).then(setPendentesCount).catch(() => null)
+                  }).catch(() => null)
+                }}
+                className="flex-1 py-2.5 bg-blue-600 rounded-xl text-sm font-semibold text-white"
+              >
+                Sobrescrever servidor
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Toasts */}
-      <div className="fixed top-4 left-0 right-0 z-50 flex flex-col gap-2 px-4 pointer-events-none">
+      <div
+        role="region"
+        aria-live="assertive"
+        aria-atomic="true"
+        className="fixed top-4 left-0 right-0 z-50 flex flex-col gap-2 px-4 pointer-events-none"
+      >
         {toasts.map(t => (
           <div
             key={t.id}
             className={`flex items-center justify-between gap-3 px-4 py-3 rounded-xl shadow-lg text-white text-sm font-medium pointer-events-auto max-w-lg mx-auto w-full ${t.tipo === 'sucesso' ? 'bg-green-600' : 'bg-red-600'}`}
           >
             <span>{t.tipo === 'sucesso' ? '✓' : '⚠️'} {t.texto}</span>
-            <button type="button" onClick={() => removeToast(t.id)} className="w-8 h-8 flex items-center justify-center text-white/80 text-xl leading-none">×</button>
+            <button
+              type="button"
+              onClick={() => removeToast(t.id)}
+              aria-label="Fechar notificação"
+              className="w-10 h-10 flex items-center justify-center text-white/80 text-xl leading-none"
+            >×</button>
           </div>
         ))}
       </div>

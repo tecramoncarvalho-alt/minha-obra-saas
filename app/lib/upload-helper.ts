@@ -55,12 +55,6 @@ export async function uploadFotoComRetry({
   }
 
   // Fase 2: upload com retry (30–100%)
-  const formData = new FormData()
-  formData.append('arquivo', comprimido, file.name)
-  formData.append('atividade_id', String(atividadeId))
-  formData.append('data_medicao', new Date().toISOString().slice(0, 10))
-  if (apontamentoId) formData.append('apontamento_id', apontamentoId)
-
   let ultimoErro = new Error('Falha no upload.')
 
   for (let tentativa = 0; tentativa <= maxRetries; tentativa++) {
@@ -70,12 +64,26 @@ export async function uploadFotoComRetry({
     }
     onProgress(30 + Math.round(((tentativa + 1) / (maxRetries + 1)) * 40))
 
+    // FormData recriado a cada tentativa — body de fetch é consumido na primeira leitura
+    const formData = new FormData()
+    formData.append('arquivo', comprimido, file.name)
+    formData.append('atividade_id', String(atividadeId))
+    formData.append('data_medicao', new Date().toISOString().slice(0, 10))
+    if (apontamentoId) formData.append('apontamento_id', apontamentoId)
+
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 45_000)
+
     let res: Response
     try {
-      res = await fetch('/api/medicoes/upload', { method: 'POST', body: formData })
-    } catch {
-      ultimoErro = new Error('Erro de conexão. Verifique sua internet.')
+      res = await fetch('/api/medicoes/upload', { method: 'POST', body: formData, signal: controller.signal })
+    } catch (e) {
+      ultimoErro = e instanceof Error && e.name === 'AbortError'
+        ? new Error('Upload cancelado por timeout (45s). Verifique sua conexão.')
+        : new Error('Erro de conexão. Verifique sua internet.')
       continue
+    } finally {
+      clearTimeout(timeoutId)
     }
 
     if (res.ok) {

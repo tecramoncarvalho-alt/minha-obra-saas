@@ -16,6 +16,8 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Minha Obra",
   description: "Gestão de obras com Linha de Balanço",
+  themeColor: '#1e3a5f',
+  appleWebApp: { capable: true, statusBarStyle: 'default', title: 'Minha Obra' },
 };
 
 export default function RootLayout({

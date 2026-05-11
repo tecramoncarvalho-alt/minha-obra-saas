@@ -104,13 +104,28 @@ export async function POST(
   }
 
   const body = await request.json()
-  const result = ApontamentoDiarioSchema.safeParse(body)
+  const { clientCreatedAt, ...restBody } = body as Record<string, unknown>
+  const result = ApontamentoDiarioSchema.safeParse(restBody)
   if (!result.success) {
     const mensagens = result.error.issues.map(i => i.message).join('; ')
     return NextResponse.json({ error: mensagens }, { status: 400 })
   }
 
   const { atividade_id, data, efetivo_real, percentual_executado, status, observacao, responsavel } = result.data
+
+  // Detecção de conflito: registro existente modificado após o cliente ir offline
+  if (clientCreatedAt && typeof clientCreatedAt === 'string') {
+    const { data: existente } = await supabase
+      .from('apontamentos_diarios')
+      .select('id,efetivo_real,percentual_executado,status,observacao,updated_at')
+      .eq('atividade_id', atividade_id)
+      .eq('data', data)
+      .maybeSingle()
+
+    if (existente && existente.updated_at && existente.updated_at > clientCreatedAt) {
+      return NextResponse.json({ conflict: true, serverVersion: existente }, { status: 409 })
+    }
+  }
 
   try {
     const apontamento = await salvarApontamento(
