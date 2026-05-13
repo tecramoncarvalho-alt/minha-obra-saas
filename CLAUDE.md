@@ -38,6 +38,7 @@ Estes conceitos são fundamentais para entender qualquer pedido relacionado ao d
 - **React Query 5.100.9** (`@tanstack/react-query`) — cache, sincronização e invalidação de queries
 - **Recharts 3.8.1** — apenas para Curva S no dashboard
 - **browser-image-compression 2.0.2** — compressão de fotos antes do upload (máx 0.8 MB, 1920px)
+- **Dexie.js 4.x** — IndexedDB wrapper para offline queue de apontamentos (`app/lib/offline-db.ts`)
 - **Zod 4.4.2** — validação de schema no upload e apontamentos
 - **Vitest 4.1.5** — testes unitários de funções puras em `app/lib/`
 - **Vercel** (deploy em produção, branch `main`)
@@ -50,9 +51,12 @@ Estes conceitos são fundamentais para entender qualquer pedido relacionado ao d
 plansaas/
 ├── proxy.ts                          # Proteção de rotas (Next.js 16 — NÃO é middleware.ts)
 ├── app/
-│   ├── layout.tsx                    # RootLayout — envolve tudo com <AuthProvider>
+│   ├── layout.tsx                    # RootLayout — envolve tudo com <AuthProvider>; themeColor + appleWebApp metadata
+│   ├── manifest.ts                   # PWA manifest (App Router file-based): nome, ícones, display standalone
 │   ├── providers.tsx                 # AuthProvider: AuthContext + QueryClientProvider + ReactQueryDevtools
 │   ├── calendario.ts                 # FONTE DE VERDADE para cálculos de datas úteis
+│   ├── hooks/
+│   │   └── useOnlineStatus.ts        # navigator.onLine + eventos online/offline — usado em apontamentos
 │   ├── page.tsx                      # Home: lista e criação de obras
 │   ├── login/page.tsx                # Login email+senha e Google OAuth
 │   ├── signup/page.tsx               # Cadastro com confirmação por email
@@ -104,7 +108,9 @@ plansaas/
 │   │   ├── schemas.ts                # Validações Zod (ApontamentoDiarioSchema, MedicaoSchema)
 │   │   ├── calculador-avanco.ts      # Funções puras: desvio, CurvaS, deltaEfetivo, resumoObra
 │   │   ├── apontamentos.ts           # Helpers de BD: getApontamentosDoDia, atualizarApontamento, …
-│   │   ├── upload-helper.ts          # uploadFotoComRetry: compressão + retry exponencial
+│   │   ├── upload-helper.ts          # uploadFotoComRetry: compressão + retry exponencial, FormData por tentativa, AbortController 45s
+│   │   ├── offline-db.ts             # Dexie schema v1: tabela pendingApontamentos (obraId, atividadeId, data, arquivoBase64, conflito)
+│   │   ├── sync.ts                   # sincronizarPendentes, resolverConflito, contarPendentes
 │   │   ├── query-hooks.ts            # React Query hooks: useStorageQuota, useApontamentosHoje
 │   │   ├── super-admin.ts            # isSuperAdmin(userId) — usa service_role, queries system_admins
 │   │   └── audit.ts                  # createAuditLog() — insert em audit_logs via service_role
@@ -162,6 +168,10 @@ plansaas/
 │   └── Header.tsx
 ├── lib/
 │   └── supabase/client.ts
+├── public/
+│   └── icons/
+│       ├── icon-192.png              # Ícone PWA 192×192 (fundo #1e3a5f, iniciais "MO")
+│       └── icon-512.png              # Ícone PWA 512×512
 ├── __tests__/
 │   └── calculadorAvanco.test.ts      # 17 testes Vitest
 └── vitest.config.ts
@@ -190,7 +200,7 @@ plansaas/
 - `useApontamentosHoje(obraId, data, enabled?)` em `app/lib/query-hooks.ts` — apontamentos do dia; invalida após salvar
 - `queryClient.invalidateQueries` é o mecanismo de sincronização — **sem optimistic sync** (upload de foto não é reversível)
 - `ReactQueryDevtools` disponível em desenvolvimento (painel no rodapé da página)
-- Estrutura preparada para `persistQueryClient` + IndexedDB (PWA futuro)
+- IndexedDB via Dexie.js implementado em `app/lib/offline-db.ts` — offline queue de apontamentos com base64 de fotos, contagem de tentativas e flag de conflito
 
 ---
 
@@ -423,10 +433,49 @@ Variáveis de ambiente ficam em `.env.local` (não commitado).
 - **Não implementar lógica de desvio inline** nas páginas — usar `app/lib/calculador-avanco.ts`
 - **Não usar `users:user_id(email)` em joins PostgREST** — `auth.users` é inacessível via API pública; usar `admin.auth.admin.listUsers()` com service_role
 - **Não omitir `type="button"`** em botões dentro de componentes — o padrão HTML é `type="submit"`, que pode causar submit acidental se houver um `<form>` ancestral
+- **Não instalar `@ducanh2912/next-pwa`** nem outros wrappers PWA baseados em webpack — incompatível com Turbopack do Next.js 16 no Vercel; causa `WorkerError: Call retries were exceeded` no `npm run build`. Alternativas documentadas na memória do Claude (3 opções: `turbopack: {}`, SW manual, Serwist)
 
 ---
 
 ## Progresso / Changelog
+
+### 2026-05-11 — Auditoria Técnica: PWA Core, Offline Sync e Correções Críticas
+
+**Motivação**: auditoria identificou bugs críticos de upload, bug de permissão bloqueando planejador/operator, ausência completa de PWA e gaps de acessibilidade mobile. Implementadas correções e camada PWA/offline em 5 fases.
+
+**Bug crítico de permissão — `assertRole` com role antiga**
+- `app/lib/apontamentos.ts`: `assertRole` em `salvarApontamento` e `atualizarApontamento` verificava `['admin', 'editor']` — `editor` era o nome da role antes da migração Multi-Tenant (2026-05-10). Todos os usuários com role `planejador` e `operator` recebiam HTTP 400 ao salvar apontamentos. Corrigido para `['admin', 'planejador', 'operator']`.
+
+**Correções críticas de upload (Fase 1)**
+- `app/lib/upload-helper.ts`: `FormData` recriado dentro do loop de retry — body do `fetch` é consumido na primeira leitura e não pode ser relido; `AbortController` com timeout de 45s via `setTimeout` + `controller.abort()` para evitar requests penduradas indefinidamente
+- `apontamentos/page.tsx`: `handleSalvarTodos` sequencializado — um `await salvarUm()` por vez em vez de `Promise.all`; evita acúmulo de blobs e crash em mobile com pouca RAM
+
+**Correções de acessibilidade / CLS (Fase 2)**
+- `UploadFoto.tsx`: todos os estados (enviando/sucesso/erro/preview/idle) envolvidos em `div.min-h-[72px]` — elimina CLS de até 40px entre estados; `role="button"` + `tabIndex={0}` + `onKeyDown` na área de drag-drop; "Tentar com outro arquivo" como `<button>` real com `min-h-[44px]`; alt texts descritivos
+- `apontamentos/page.tsx`: toast com `role="region"` + `aria-live="assertive"` + `aria-atomic="true"`; botão fechar com `aria-label` e `w-10 h-10`; badges `py-0.5` → `py-1`; dupla invalidação redundante após `handleSalvarTodos` removida
+
+**PWA Core (Fase 3)**
+- `app/manifest.ts` (novo): manifest via App Router — nome, short_name, ícones, `display: standalone`, cores
+- `app/layout.tsx`: `themeColor: '#1e3a5f'` e `appleWebApp` metadata adicionados
+- `public/icons/icon-192.png` + `public/icons/icon-512.png` (novos): gerados via `sharp` com iniciais "MO" em fundo azul `#1e3a5f`
+- `@ducanh2912/next-pwa` removido: incompatível com Turbopack do Next.js 16 no Vercel (`WorkerError: Call retries were exceeded`); service worker pendente
+
+**Offline Sync com IndexedDB (Fase 4)**
+- `app/lib/offline-db.ts` (novo): Dexie schema v1, tabela `pendingApontamentos` — campos: `obraId`, `atividadeId`, `data`, `efetivo_real`, `percentual_executado`, `status`, `arquivoBase64/Mime/Nome`, `createdAt`, `tentativas`, `erroUltimo`, `conflito`, `servidorVersion`
+- `app/lib/sync.ts` (novo): `sincronizarPendentes(obraId)` lê fila do Dexie, POSTa ao servidor, deleta em sucesso, marca `conflito=true` em 409; `resolverConflito(localId, acao)` e `contarPendentes(obraId)`
+- `app/hooks/useOnlineStatus.ts` (novo): `navigator.onLine` + eventos `online`/`offline`
+- `apontamentos/page.tsx`: `salvarUm` detecta `!isOnline` e persiste no Dexie em vez de fazer fetch; banner âmbar fixo quando offline com contador de pendentes; `wasOfflineRef` detecta transição offline→online e dispara sync automático
+
+**Reconciliação de Conflitos (Fase 5)**
+- `app/api/obras/[id]/apontamentos/route.ts`: POST aceita `clientCreatedAt` no body; compara com `updated_at` do servidor; retorna HTTP 409 com `{ conflict: true, serverVersion }` se o registro foi modificado depois que o cliente foi offline
+- `apontamentos/page.tsx`: modal de resolução — "Descartar minha versão" (delete do Dexie) ou "Sobrescrever servidor" (retry sem `clientCreatedAt`)
+- **SQL pendente** (executar no Supabase SQL Editor para `updated_at` funcionar na detecção de conflito):
+  ```sql
+  CREATE OR REPLACE FUNCTION set_updated_at() RETURNS TRIGGER AS $$ BEGIN NEW.updated_at = now(); RETURN NEW; END; $$ LANGUAGE plpgsql;
+  CREATE OR REPLACE TRIGGER trg_apontamentos_diarios_updated_at BEFORE UPDATE ON apontamentos_diarios FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+  ```
+
+---
 
 ### 2026-05-09 — Upload Staged, Mobile-First Accordion e React Query Fase 1
 

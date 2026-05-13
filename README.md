@@ -17,6 +17,12 @@ Plataforma multi-tenant para planejamento e monitoramento de obras usando o mét
 - **Curva S** — avanço acumulado planejado vs. real
 - **Atividades em atenção** — filtro automático por desvio > 10%, prazo vencido e status Paralisada
 
+### Mobile / Offline
+- **PWA instalável** — manifest com ícones, display standalone, suporte a "Adicionar à tela inicial"
+- **Fila offline** — apontamentos salvos localmente (IndexedDB/Dexie) quando sem internet; sincronizados automaticamente ao reconectar
+- **Detecção de conflito** — se um apontamento foi editado no servidor enquanto o dispositivo estava offline, exibe modal para escolher entre a versão local e a do servidor
+- **Accordion mobile-first** — touch targets ≥ 44px, font-size ≥ 16px (sem zoom iOS), auto-colapso após salvar
+
 ### Multi-tenant e Acesso
 - **Onboarding** — criar empresa (gera código de 8 dígitos) ou solicitar entrada por código
 - **4 roles**: `admin`, `planejador`, `operator`, `viewer`
@@ -45,6 +51,7 @@ Plataforma multi-tenant para planejamento e monitoramento de obras usando o mét
 | Estilos | Tailwind CSS v4 (sem bibliotecas de componentes) |
 | Banco + Auth | Supabase (Postgres + Auth + Storage) |
 | Cache | React Query 5.100.9 |
+| Offline | Dexie.js (IndexedDB) |
 | Gráficos | Recharts 3.8.1 (apenas Curva S) |
 | Validação | Zod 4.4.2 |
 | Testes | Vitest 4.1.5 |
