@@ -630,6 +630,12 @@ export default function ObraDetalhes() {
               >
                 📊 Linha de Balanço
               </button>
+              <button
+                onClick={() => router.push(`/obras/${obraId}/dashboard-tv`)}
+                className="px-3 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-sm font-semibold transition-colors"
+              >
+                📺 Dashboard TV
+              </button>
             </div>
           </div>
         </div>

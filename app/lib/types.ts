@@ -2,6 +2,7 @@ export interface Obra {
   id: number; nome: string;
   sabado_util: boolean; domingo_util: boolean;
   data_inicio: string | null; data_fim: string | null;
+  tv_token?: string | null;
 }
 
 export interface Feriado { id: number; obra_id: number; data: string; nome: string; }
