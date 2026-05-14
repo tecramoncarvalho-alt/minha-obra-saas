@@ -52,15 +52,31 @@ function toISO(d: Date) {
   return d.toISOString().slice(0, 10)
 }
 
+// Ordena pavimentos por bloco (ordem de aparição por número mínimo) e dentro do bloco por numero asc
+function ordenarPavimentos(pavimentos: TVPavimento[]): TVPavimento[] {
+  const blocoMap = new Map<string, TVPavimento[]>()
+  for (const pav of pavimentos) {
+    const bloco = pav.nome.includes(' - ') ? pav.nome.split(' - ')[0] : pav.nome
+    const lista = blocoMap.get(bloco) ?? []
+    lista.push(pav)
+    blocoMap.set(bloco, lista)
+  }
+  return Array.from(blocoMap.entries())
+    .sort(([, pa], [, pb]) => {
+      const minA = Math.min(...pa.map(p => p.numero ?? 0))
+      const minB = Math.min(...pb.map(p => p.numero ?? 0))
+      return minA - minB
+    })
+    .flatMap(([, pavs]) => pavs.sort((a, b) => (a.numero ?? 0) - (b.numero ?? 0)))
+}
+
 export default function LinhaBalancoTV({ atividades, pavimentos, apontamentos }: Props) {
   const diasSemana = getSemanaAtual()
   const segStr = toISO(diasSemana[0])
   const domStr = toISO(diasSemana[6])
   const hojeStr = toISO(new Date())
 
-  const pavMap = new Map(pavimentos.map(p => [p.id, p]))
-
-  // Mapa: atividadeId → apontamento mais recente
+  // Mapa: atividadeId → apontamento mais recente (apontamentos chegam ordenados desc por data)
   const ultApontamento = new Map<number, TVApontamento>()
   for (const ap of apontamentos) {
     if (!ultApontamento.has(ap.atividade_id)) {
@@ -68,10 +84,12 @@ export default function LinhaBalancoTV({ atividades, pavimentos, apontamentos }:
     }
   }
 
-  // Filtrar atividades ativas na semana e agrupar por pavimento
-  const atividadesSemana = atividades.filter(
-    a => a.data_inicio <= domStr && a.data_fim >= segStr
-  )
+  // Atividades da semana, excluindo 100% concluídas
+  const atividadesSemana = atividades.filter(a => {
+    if (a.data_inicio > domStr || a.data_fim < segStr) return false
+    const pct = ultApontamento.get(a.id)?.percentual_executado ?? 0
+    return pct < 100
+  })
 
   const porPavimento = new Map<number, TVAtividade[]>()
   for (const at of atividadesSemana) {
@@ -80,7 +98,9 @@ export default function LinhaBalancoTV({ atividades, pavimentos, apontamentos }:
     porPavimento.set(at.pavimento_id, lista)
   }
 
-  const pavimentosComAtiv = pavimentos.filter(p => porPavimento.has(p.id))
+  // Pavimentos com atividades, ordenados por bloco→número
+  const pavimentosOrdenados = ordenarPavimentos(pavimentos)
+  const pavimentosComAtiv = pavimentosOrdenados.filter(p => porPavimento.has(p.id))
 
   if (!atividadesSemana.length) {
     return (
@@ -141,12 +161,11 @@ export default function LinhaBalancoTV({ atividades, pavimentos, apontamentos }:
                 const cor = getCor(at.equipe ?? 'Sem equipe')
                 const ap = ultApontamento.get(at.id)
                 const pct = ap?.percentual_executado ?? 0
-                const concluida = pct === 100
 
                 return (
                   <div
                     key={at.id}
-                    className={`grid gap-px ${concluida ? 'opacity-40' : ''}`}
+                    className="grid gap-px"
                     style={{ gridTemplateColumns: '200px repeat(7, 1fr)' }}
                   >
                     {/* Nome da atividade */}

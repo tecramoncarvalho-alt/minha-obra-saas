@@ -16,21 +16,11 @@ function dotColor(pct: number) {
   return 'bg-red-500'
 }
 
-function getSemanaAtual(): [string, string] {
-  const hoje = new Date()
-  const diaSemana = hoje.getDay()
-  const diffSegunda = diaSemana === 0 ? -6 : 1 - diaSemana
-  const segunda = new Date(hoje)
-  segunda.setDate(hoje.getDate() + diffSegunda)
-  const domingo = new Date(segunda)
-  domingo.setDate(segunda.getDate() + 6)
-  return [segunda.toISOString().slice(0, 10), domingo.toISOString().slice(0, 10)]
-}
-
 export default function EquipesPanel({ atividades, pavimentos, apontamentos }: Props) {
-  const [segStr, domStr] = getSemanaAtual()
+  const hojeStr = new Date().toISOString().slice(0, 10)
   const pavMap = new Map(pavimentos.map(p => [p.id, p]))
 
+  // Mapa: atividadeId → apontamento mais recente (para verificar % concluído)
   const ultApontamento = new Map<number, TVApontamento>()
   for (const ap of apontamentos) {
     if (!ultApontamento.has(ap.atividade_id)) {
@@ -38,14 +28,24 @@ export default function EquipesPanel({ atividades, pavimentos, apontamentos }: P
     }
   }
 
-  // Atividades da semana
-  const atividadesSemana = atividades.filter(
-    a => a.data_inicio <= domStr && a.data_fim >= segStr
-  )
+  // Apontamento de hoje por atividade (para efetivo_real do dia)
+  const apHojeMap = new Map<number, TVApontamento>()
+  for (const ap of apontamentos) {
+    if (ap.data === hojeStr && !apHojeMap.has(ap.atividade_id)) {
+      apHojeMap.set(ap.atividade_id, ap)
+    }
+  }
+
+  // Atividades planejadas para hoje, excluindo 100% concluídas
+  const atividadesHoje = atividades.filter(a => {
+    if (a.data_inicio > hojeStr || a.data_fim < hojeStr) return false
+    const pct = ultApontamento.get(a.id)?.percentual_executado ?? 0
+    return pct < 100
+  })
 
   // Agrupar por equipe
   const porEquipe = new Map<string, TVAtividade[]>()
-  for (const at of atividadesSemana) {
+  for (const at of atividadesHoje) {
     const equipe = at.equipe ?? 'Sem equipe'
     const lista = porEquipe.get(equipe) ?? []
     lista.push(at)
@@ -57,7 +57,7 @@ export default function EquipesPanel({ atividades, pavimentos, apontamentos }: P
   if (!equipes.length) {
     return (
       <div className="flex items-center justify-center h-full text-gray-500 text-lg">
-        Sem equipes esta semana
+        Sem equipes planejadas para hoje
       </div>
     )
   }
@@ -68,7 +68,7 @@ export default function EquipesPanel({ atividades, pavimentos, apontamentos }: P
         const cor = getCor(equipe)
         const prevTotal = ats.reduce((acc, a) => acc + (a.efetivo ?? 0), 0)
         const realTotal = ats.reduce((acc, a) => {
-          const ap = ultApontamento.get(a.id)
+          const ap = apHojeMap.get(a.id)
           return acc + (ap?.efetivo_real ?? 0)
         }, 0)
         const pct = prevTotal > 0 ? Math.round((realTotal / prevTotal) * 100) : 0

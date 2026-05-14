@@ -14,24 +14,12 @@ function corEfetivo(pct: number) {
   return 'bg-red-500'
 }
 
-function getSemanaAtual(): [string, string] {
-  const hoje = new Date()
-  const diaSemana = hoje.getDay()
-  const diffSegunda = diaSemana === 0 ? -6 : 1 - diaSemana
-  const segunda = new Date(hoje)
-  segunda.setDate(hoje.getDate() + diffSegunda)
-  const domingo = new Date(segunda)
-  domingo.setDate(segunda.getDate() + 6)
-  return [segunda.toISOString().slice(0, 10), domingo.toISOString().slice(0, 10)]
-}
-
 export default function AtividadesEfetivo({ atividades, pavimentos, apontamentos }: Props) {
-  const [segStr, domStr] = getSemanaAtual()
   const hojeStr = new Date().toISOString().slice(0, 10)
 
   const pavMap = new Map(pavimentos.map(p => [p.id, p]))
 
-  // Mapa: atividadeId → apontamento mais recente
+  // Mapa: atividadeId → apontamento mais recente (para verificar % concluído)
   const ultApontamento = new Map<number, TVApontamento>()
   for (const ap of apontamentos) {
     if (!ultApontamento.has(ap.atividade_id)) {
@@ -39,20 +27,25 @@ export default function AtividadesEfetivo({ atividades, pavimentos, apontamentos
     }
   }
 
-  // Apontamentos de hoje (para marcar sem apontamento hoje)
-  const apHoje = new Set(
-    apontamentos.filter(a => a.data === hojeStr).map(a => a.atividade_id)
-  )
+  // Apontamento de hoje por atividade (para efetivo_real do dia)
+  const apHojeMap = new Map<number, TVApontamento>()
+  for (const ap of apontamentos) {
+    if (ap.data === hojeStr && !apHojeMap.has(ap.atividade_id)) {
+      apHojeMap.set(ap.atividade_id, ap)
+    }
+  }
 
-  // Atividades ativas na semana
-  const atividadesSemana = atividades.filter(
-    a => a.data_inicio <= domStr && a.data_fim >= segStr
-  )
+  // Atividades planejadas para hoje, excluindo 100% concluídas
+  const atividadesHoje = atividades.filter(a => {
+    if (a.data_inicio > hojeStr || a.data_fim < hojeStr) return false
+    const pct = ultApontamento.get(a.id)?.percentual_executado ?? 0
+    return pct < 100
+  })
 
-  // Totais de efetivo
-  const totalEfetivoPrevisto = atividadesSemana.reduce((acc, a) => acc + (a.efetivo ?? 0), 0)
-  const totalEfetivoReal = atividadesSemana.reduce((acc, a) => {
-    const ap = ultApontamento.get(a.id)
+  // Totais de efetivo do dia
+  const totalEfetivoPrevisto = atividadesHoje.reduce((acc, a) => acc + (a.efetivo ?? 0), 0)
+  const totalEfetivoReal = atividadesHoje.reduce((acc, a) => {
+    const ap = apHojeMap.get(a.id)
     return acc + (ap?.efetivo_real ?? 0)
   }, 0)
   const pctTotal = totalEfetivoPrevisto > 0
@@ -63,7 +56,7 @@ export default function AtividadesEfetivo({ atividades, pavimentos, apontamentos
     <div className="flex flex-col h-full overflow-hidden">
       {/* Card de resumo */}
       <div className="flex-shrink-0 m-3 p-4 bg-gray-800 rounded-xl border border-gray-700">
-        <div className="text-xs text-gray-400 uppercase tracking-wide mb-1">Total na obra agora</div>
+        <div className="text-xs text-gray-400 uppercase tracking-wide mb-1">Total na obra hoje</div>
         <div className="flex items-end gap-2">
           <span className="text-3xl font-bold text-white">{totalEfetivoReal}</span>
           <span className="text-lg text-gray-400 mb-0.5">/ {totalEfetivoPrevisto} 👷</span>
@@ -79,22 +72,20 @@ export default function AtividadesEfetivo({ atividades, pavimentos, apontamentos
 
       {/* Lista de atividades */}
       <div className="overflow-y-auto flex-1 px-3 pb-3 space-y-2">
-        {atividadesSemana.length === 0 && (
+        {atividadesHoje.length === 0 && (
           <div className="text-center text-gray-500 py-8">
-            Nenhuma atividade na semana
+            Nenhuma atividade planejada para hoje
           </div>
         )}
-        {atividadesSemana.map(at => {
+        {atividadesHoje.map(at => {
           const pav = pavMap.get(at.pavimento_id)
-          const ap = ultApontamento.get(at.id)
-          const efetivoReal = ap?.efetivo_real ?? 0
+          const apHoje = apHojeMap.get(at.id)
+          const efetivoReal = apHoje?.efetivo_real ?? 0
           const efetivoPrev = at.efetivo ?? 0
           const pctEfetivo = efetivoPrev > 0 ? Math.round((efetivoReal / efetivoPrev) * 100) : 0
-          const semApontamentoHoje = !apHoje.has(at.id)
+          const semApontamentoHoje = !apHojeMap.has(at.id)
 
-          const nomePav = pav
-            ? (pav.nome.includes(' - ') ? pav.nome : pav.nome)
-            : ''
+          const nomePav = pav?.nome ?? ''
 
           return (
             <div
