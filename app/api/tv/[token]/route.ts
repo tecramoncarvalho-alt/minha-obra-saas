@@ -52,10 +52,12 @@ export async function GET(
   const atividadeIds = atividades.map(a => a.id)
 
   // Apontamentos dos últimos 30 dias para exibir o progresso mais recente de cada atividade
+  const pad = (n: number) => String(n).padStart(2, '0')
   const trintaDiasAtras = new Date()
   trintaDiasAtras.setDate(trintaDiasAtras.getDate() - 30)
-  const dataInicio = trintaDiasAtras.toISOString().slice(0, 10)
-  const hoje = new Date().toISOString().slice(0, 10)
+  const dataInicio = `${trintaDiasAtras.getFullYear()}-${pad(trintaDiasAtras.getMonth() + 1)}-${pad(trintaDiasAtras.getDate())}`
+  const hj = new Date()
+  const hoje = `${hj.getFullYear()}-${pad(hj.getMonth() + 1)}-${pad(hj.getDate())}`
 
   const { data: apontamentos } = await admin
     .from('apontamentos_diarios')

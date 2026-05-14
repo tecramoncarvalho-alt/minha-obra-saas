@@ -20,7 +20,8 @@ export default function AtividadesEfetivo({ atividades, pavimentos, apontamentos
   const scrollRef = useRef<HTMLDivElement>(null)
   useAutoScroll(scrollRef)
 
-  const hojeStr = new Date().toISOString().slice(0, 10)
+  const hoje = new Date()
+  const hojeStr = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}-${String(hoje.getDate()).padStart(2, '0')}`
 
   const pavMap = new Map(pavimentos.map(p => [p.id, p]))
 

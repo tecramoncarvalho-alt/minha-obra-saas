@@ -73,8 +73,10 @@ export default function DashboardTVPage() {
     // Apontamentos dos últimos 30 dias
     const trintaDiasAtras = new Date()
     trintaDiasAtras.setDate(trintaDiasAtras.getDate() - 30)
-    const dataInicio = trintaDiasAtras.toISOString().slice(0, 10)
-    const hoje = new Date().toISOString().slice(0, 10)
+    const pad = (n: number) => String(n).padStart(2, '0')
+    const dataInicio = `${trintaDiasAtras.getFullYear()}-${pad(trintaDiasAtras.getMonth() + 1)}-${pad(trintaDiasAtras.getDate())}`
+    const hj = new Date()
+    const hoje = `${hj.getFullYear()}-${pad(hj.getMonth() + 1)}-${pad(hj.getDate())}`
 
     const { data: apRaw } = await supabase
       .from('apontamentos_diarios')

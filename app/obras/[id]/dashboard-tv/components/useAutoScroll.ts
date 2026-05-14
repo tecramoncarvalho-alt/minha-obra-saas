@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 
 const SPEED_PX_PER_SEC = 40
 const PAUSE_BOTTOM_MS = 4000
+const INITIAL_DELAY_MS = 4000
 const RESUME_AFTER_MANUAL_MS = 8000
 
 export function useAutoScroll(ref: { current: HTMLElement | null }) {
@@ -9,7 +10,8 @@ export function useAutoScroll(ref: { current: HTMLElement | null }) {
     const el = ref.current
     if (!el) return
 
-    let animId: number
+    let animId: number | null = null
+    let startTimer: ReturnType<typeof setTimeout> | null = null
     let manualTimeout: ReturnType<typeof setTimeout> | null = null
     let paused = false
     let atBottom = false
@@ -68,10 +70,14 @@ export function useAutoScroll(ref: { current: HTMLElement | null }) {
     el.addEventListener('wheel', onManual, { passive: true })
     el.addEventListener('touchstart', onManual, { passive: true })
 
-    animId = requestAnimationFrame(tick)
+    // Aguarda o delay inicial antes de começar o loop
+    startTimer = setTimeout(() => {
+      animId = requestAnimationFrame(tick)
+    }, INITIAL_DELAY_MS)
 
     return () => {
-      cancelAnimationFrame(animId)
+      if (startTimer) clearTimeout(startTimer)
+      if (animId !== null) cancelAnimationFrame(animId)
       if (manualTimeout) clearTimeout(manualTimeout)
       el.removeEventListener('wheel', onManual)
       el.removeEventListener('touchstart', onManual)

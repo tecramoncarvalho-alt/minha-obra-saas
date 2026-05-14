@@ -50,8 +50,8 @@ function getSemanaAtual(): Date[] {
   })
 }
 
-function toISO(d: Date) {
-  return d.toISOString().slice(0, 10)
+function localISO(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
 // Ordena pavimentos por bloco (ordem de aparição por número mínimo) e dentro do bloco por numero asc
@@ -77,9 +77,9 @@ export default function LinhaBalancoTV({ atividades, pavimentos, apontamentos }:
   useAutoScroll(scrollRef)
 
   const diasSemana = getSemanaAtual()
-  const segStr = toISO(diasSemana[0])
-  const domStr = toISO(diasSemana[6])
-  const hojeStr = toISO(new Date())
+  const segStr = localISO(diasSemana[0])
+  const domStr = localISO(diasSemana[6])
+  const hojeStr = localISO(new Date())
 
   // Mapa: atividadeId → apontamento mais recente (apontamentos chegam ordenados desc por data)
   const ultApontamento = new Map<number, TVApontamento>()
@@ -126,7 +126,7 @@ export default function LinhaBalancoTV({ atividades, pavimentos, apontamentos }:
           <div
             key={i}
             className={`px-1 py-2 text-center text-xs font-semibold uppercase tracking-wide ${
-              toISO(dia) === hojeStr
+              localISO(dia) === hojeStr
                 ? 'bg-green-900 text-green-300'
                 : 'bg-gray-900 text-gray-400'
             }`}
@@ -185,7 +185,7 @@ export default function LinhaBalancoTV({ atividades, pavimentos, apontamentos }:
 
                     {/* Células por dia */}
                     {diasSemana.map((dia, i) => {
-                      const diaStr = toISO(dia)
+                      const diaStr = localISO(dia)
                       const ativa = at.data_inicio <= diaStr && at.data_fim >= diaStr
                       const isHoje = diaStr === hojeStr
 
