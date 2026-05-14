@@ -1,6 +1,8 @@
 'use client'
 
+import { useRef } from 'react'
 import type { TVAtividade, TVPavimento, TVApontamento } from './LinhaBalancoTV'
+import { useAutoScroll } from './useAutoScroll'
 
 interface Props {
   atividades: TVAtividade[]
@@ -15,6 +17,9 @@ function corEfetivo(pct: number) {
 }
 
 export default function AtividadesEfetivo({ atividades, pavimentos, apontamentos }: Props) {
+  const scrollRef = useRef<HTMLDivElement>(null)
+  useAutoScroll(scrollRef)
+
   const hojeStr = new Date().toISOString().slice(0, 10)
 
   const pavMap = new Map(pavimentos.map(p => [p.id, p]))
@@ -71,7 +76,7 @@ export default function AtividadesEfetivo({ atividades, pavimentos, apontamentos
       </div>
 
       {/* Lista de atividades */}
-      <div className="overflow-y-auto flex-1 px-3 pb-3 space-y-2">
+      <div ref={scrollRef} className="overflow-y-auto flex-1 px-3 pb-3 space-y-2">
         {atividadesHoje.length === 0 && (
           <div className="text-center text-gray-500 py-8">
             Nenhuma atividade planejada para hoje

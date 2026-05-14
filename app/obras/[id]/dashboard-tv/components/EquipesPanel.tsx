@@ -1,7 +1,9 @@
 'use client'
 
+import { useRef } from 'react'
 import { getCor } from '@/app/obras/[id]/linha-balanco/utils/geradorCores'
 import type { TVAtividade, TVPavimento, TVApontamento } from './LinhaBalancoTV'
+import { useAutoScroll } from './useAutoScroll'
 
 interface Props {
   atividades: TVAtividade[]
@@ -17,6 +19,9 @@ function dotColor(pct: number) {
 }
 
 export default function EquipesPanel({ atividades, pavimentos, apontamentos }: Props) {
+  const scrollRef = useRef<HTMLDivElement>(null)
+  useAutoScroll(scrollRef)
+
   const hojeStr = new Date().toISOString().slice(0, 10)
   const pavMap = new Map(pavimentos.map(p => [p.id, p]))
 
@@ -63,7 +68,7 @@ export default function EquipesPanel({ atividades, pavimentos, apontamentos }: P
   }
 
   return (
-    <div className="overflow-y-auto h-full p-3 space-y-3">
+    <div ref={scrollRef} className="overflow-y-auto h-full p-3 space-y-3">
       {equipes.map(([equipe, ats]) => {
         const cor = getCor(equipe)
         const prevTotal = ats.reduce((acc, a) => acc + (a.efetivo ?? 0), 0)

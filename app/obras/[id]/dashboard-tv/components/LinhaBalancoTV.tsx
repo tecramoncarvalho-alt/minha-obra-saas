@@ -1,6 +1,8 @@
 'use client'
 
+import { useRef } from 'react'
 import { getCor } from '@/app/obras/[id]/linha-balanco/utils/geradorCores'
+import { useAutoScroll } from './useAutoScroll'
 
 export interface TVAtividade {
   id: number
@@ -71,6 +73,9 @@ function ordenarPavimentos(pavimentos: TVPavimento[]): TVPavimento[] {
 }
 
 export default function LinhaBalancoTV({ atividades, pavimentos, apontamentos }: Props) {
+  const scrollRef = useRef<HTMLDivElement>(null)
+  useAutoScroll(scrollRef)
+
   const diasSemana = getSemanaAtual()
   const segStr = toISO(diasSemana[0])
   const domStr = toISO(diasSemana[6])
@@ -133,7 +138,7 @@ export default function LinhaBalancoTV({ atividades, pavimentos, apontamentos }:
       </div>
 
       {/* Linhas de atividades por pavimento */}
-      <div className="overflow-y-auto flex-1">
+      <div ref={scrollRef} className="overflow-y-auto flex-1">
         {pavimentosComAtiv.map(pav => {
           const atsPav = porPavimento.get(pav.id) ?? []
           const nomePav = pav.nome.includes(' - ') ? pav.nome.split(' - ')[1] : pav.nome
