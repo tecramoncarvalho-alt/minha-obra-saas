@@ -17,6 +17,16 @@ Plataforma multi-tenant para planejamento e monitoramento de obras usando o mét
 - **Curva S** — avanço acumulado planejado vs. real
 - **Atividades em atenção** — filtro automático por desvio > 10%, prazo vencido e status Paralisada
 
+### Dashboard TV
+
+- **Link público compartilhável** — gera URL `/tv/[token]` sem necessidade de login; token UUID regenerável pelo admin
+- **QR Code** — gerado automaticamente no SharePanel para fácil exibição em TVs e monitores
+- **3 quadrantes**: Linha de Balanço semanal (45%) · Atividades + Efetivo do dia (30%) · Equipes do dia (25%)
+- **Modo kiosk** — fullscreen automático no primeiro click; cursor some após 5s de inatividade
+- **Auto-scroll com loop** — cada quadrante rola suavemente (40px/s), pausa 4s no fim, retorna ao topo e repete; rolagem manual pausa 8s
+- **Polling 30s** — dados atualizados automaticamente sem interação; indicador "AO VIVO" pulsante
+- **Atividades concluídas ocultadas** — 100% executado não aparece nos quadrantes
+
 ### Mobile / Offline
 - **PWA instalável** — manifest com ícones, display standalone, suporte a "Adicionar à tela inicial"
 - **Fila offline** — apontamentos salvos localmente (IndexedDB/Dexie) quando sem internet; sincronizados automaticamente ao reconectar
@@ -52,6 +62,7 @@ Plataforma multi-tenant para planejamento e monitoramento de obras usando o mét
 | Banco + Auth | Supabase (Postgres + Auth + Storage) |
 | Cache | React Query 5.100.9 |
 | Offline | Dexie.js (IndexedDB) |
+| QR Code | qrcode |
 | Gráficos | Recharts 3.8.1 (apenas Curva S) |
 | Validação | Zod 4.4.2 |
 | Testes | Vitest 4.1.5 |

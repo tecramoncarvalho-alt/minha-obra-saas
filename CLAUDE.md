@@ -39,6 +39,7 @@ Estes conceitos são fundamentais para entender qualquer pedido relacionado ao d
 - **Recharts 3.8.1** — apenas para Curva S no dashboard
 - **browser-image-compression 2.0.2** — compressão de fotos antes do upload (máx 0.8 MB, 1920px)
 - **Dexie.js 4.x** — IndexedDB wrapper para offline queue de apontamentos (`app/lib/offline-db.ts`)
+- **qrcode + @types/qrcode** — geração de QR Code no SharePanel do Dashboard TV
 - **Zod 4.4.2** — validação de schema no upload e apontamentos
 - **Vitest 4.1.5** — testes unitários de funções puras em `app/lib/`
 - **Vercel** (deploy em produção, branch `main`)
@@ -99,9 +100,12 @@ plansaas/
 │   │   │   ├── planos/[id]/route.ts  # PATCH + DELETE
 │   │   │   ├── usuarios/route.ts     # GET: todos usuários com emails via listUsers()
 │   │   │   └── logs/route.ts         # GET: audit_logs com emails via listUsers()
+│   │   ├── tv/
+│   │   │   └── [token]/route.ts  # GET público — resolve token via service_role → retorna dados da obra
 │   │   └── obras/[id]/
 │   │       ├── apontamentos/route.ts                 # GET (filtros data/range) + POST
-│   │       └── apontamentos/[apontamentoId]/route.ts # PUT + DELETE
+│   │       ├── apontamentos/[apontamentoId]/route.ts # PUT + DELETE
+│   │       └── tv-token/route.ts                     # PATCH (admin/planejador) — regenera tv_token
 │   ├── configuracoes/equipe/page.tsx # Redirect 301 → /admin/membros
 │   ├── lib/
 │   │   ├── types.ts                  # Interfaces centralizadas (Role, EmpresaDetalhada, Plano, …)
@@ -162,8 +166,21 @@ plansaas/
 │       │   │                         # podeEditar = role admin|planejador|operator
 │       │   └── components/
 │       │       └── UploadFoto.tsx
+│       ├── dashboard-tv/
+│       │   ├── page.tsx              # Rota autenticada — busca dados no Supabase browser client
+│       │   └── components/
+│       │       ├── DashboardTV.tsx       # Layout: header (data/relógio/AO VIVO) + 3 quadrantes
+│       │       ├── LinhaBalancoTV.tsx    # Q1 (45%) — grade semanal por pavimento; exporta TVAtividade/TVPavimento/TVApontamento
+│       │       ├── AtividadesEfetivo.tsx # Q2 (30%) — atividades planejadas hoje + efetivo do dia
+│       │       ├── EquipesPanel.tsx      # Q3 (25%) — equipes agrupadas, apenas atividades de hoje
+│       │       ├── SharePanel.tsx        # QR Code + copiar link + regenerar token (admin/planejador)
+│       │       └── useAutoScroll.ts      # Hook: scroll 40px/s, pausa 4s no fim, delay inicial 4s, retoma após manual
 │       ├── criacao-em-lote/page.tsx  # Redirect se role viewer/operator
 │       └── editar-bloco/[bloco]/page.tsx  # Redirect se role viewer/operator
+├── app/tv/
+│   └── [token]/
+│       ├── page.tsx              # Server Component público — resolve token via service_role; noindex
+│       └── TVClientWrapper.tsx   # Client: polling /api/tv/[token] a cada 30s; fullscreen automático no 1º click
 ├── components/
 │   └── Header.tsx
 ├── lib/
@@ -180,7 +197,7 @@ plansaas/
 ### Fluxo de autenticação
 
 1. `proxy.ts` intercepta todas as requisições (exceto `_next/*`, assets estáticos) — usa `getSession()` (cookie local, sem rede)
-2. Rotas públicas: `/login`, `/signup`, `/auth/callback`
+2. Rotas públicas: `/login`, `/signup`, `/auth/callback`, `/tv`, `/api/tv` — redirect-on-logged-in aplica-se **apenas** a `/login` e `/signup` (não a `/tv`)
 3. Usuário autenticado sem empresa → redirecionado para `/onboarding`
 4. `AuthProvider` em `providers.tsx` carrega empresa via `/api/me` (server-side, service_role, sem RLS)
 5. `useAuth()` expõe `{ user, empresa, role, isOwner, isSuperAdmin, subscriptionStatus, plano, loading, empresaFetched }` globalmente
@@ -262,6 +279,7 @@ obras      (id bigint PK, empresa_id uuid FK empresas,
             data_inicio date, data_fim date,
             sabado_util bool DEFAULT false,
             domingo_util bool DEFAULT false,
+            tv_token uuid DEFAULT gen_random_uuid() UNIQUE,  -- link compartilhável para Dashboard TV
             created_at)
 
 feriados   (id bigint PK, obra_id bigint FK obras,
@@ -427,6 +445,7 @@ Variáveis de ambiente ficam em `.env.local` (não commitado).
 - **Não usar `router.push` + `router.refresh`** após login — usar `window.location.href = '/'` para garantir que o proxy leia os cookies de sessão corretamente
 - **Não criar novas instâncias** de `@supabase/supabase-js` direto nas páginas — usar `@/lib/supabase/client` (singleton)
 - **Não usar `addDias` simples** para calcular prazo de atividades — usar `calcularDataFim` ou `addDiasUteis` de `app/calendario.ts`
+- **Não usar `new Date().toISOString().slice(0, 10)`** para obter "hoje" em componentes de UI — converte para UTC e retorna D+1 após as 21h no fuso UTC-3 (Brasil). Usar `getFullYear()`/`getMonth()`/`getDate()` locais: `` `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}` ``
 - **Não usar `diffDiasCorreidos`** ou qualquer subtração simples de datas — sempre `contarDiasUteis(a, b, config)`
 - **Não usar shadcn/ui** ou qualquer biblioteca de componentes — Tailwind puro
 - **Não usar Recharts** fora de `CurvaS.tsx` — é dependência pesada, circunscrita ao dashboard
@@ -438,6 +457,47 @@ Variáveis de ambiente ficam em `.env.local` (não commitado).
 ---
 
 ## Progresso / Changelog
+
+### 2026-05-13 — Dashboard TV com Link Público Compartilhável
+
+**Motivação**: permitir exibição do progresso da obra em monitores/TVs sem login, com link público gerado no sistema e QR Code.
+
+**SQL executado no Supabase (migration)**
+```sql
+ALTER TABLE obras ADD COLUMN IF NOT EXISTS tv_token uuid DEFAULT gen_random_uuid() UNIQUE;
+CREATE UNIQUE INDEX IF NOT EXISTS obras_tv_token_idx ON obras(tv_token);
+UPDATE obras SET tv_token = gen_random_uuid() WHERE tv_token IS NULL;
+```
+
+**Rota pública `/tv/[token]`**
+- `app/tv/[token]/page.tsx` (Server Component): resolve token via `service_role` no servidor; retorna 404 genérico para token inválido; metadata `robots: noindex`
+- `app/tv/[token]/TVClientWrapper.tsx`: polling `GET /api/tv/[token]` a cada 30s; fullscreen automático no primeiro click/touch; estados de loading e erro
+
+**API pública `GET /api/tv/[token]`**
+- Usa `SUPABASE_SERVICE_ROLE_KEY` apenas no servidor para resolver token → obra_id
+- Retorna pavimentos, atividades e apontamentos dos últimos 30 dias (ordenados desc)
+- Não expõe `empresa_id`, `tv_token` nem dados sensíveis na resposta
+
+**API `PATCH /api/obras/[id]/tv-token`**
+- Requer role `admin` ou `planejador`; regenera `tv_token = crypto.randomUUID()`
+
+**Rota autenticada `/obras/[id]/dashboard-tv`**
+- Busca dados direto no Supabase browser client
+- Mostra `SharePanel` apenas para admin/planejador
+
+**Componentes do Dashboard TV**
+- `DashboardTV.tsx`: header com nome da obra, data por extenso, semana, relógio "AO VIVO" + botão fullscreen flutuante; cursor some após 5s de inatividade
+- `LinhaBalancoTV.tsx`: grade semanal (Seg→Dom), atividades por pavimento ordenadas por bloco→número asc; exclui 100% concluídas; barra planejada (opacity-25) + barra real (opacity-85, width=%)
+- `AtividadesEfetivo.tsx`: apenas atividades planejadas **hoje** (não a semana); efetivo_real do apontamento do dia
+- `EquipesPanel.tsx`: agrupamento por equipe, também filtrado por hoje
+- `SharePanel.tsx`: URL + botão copiar (check 2s) + QR Code (`qrcode` npm) + botão regenerar com modal de confirmação
+- `useAutoScroll.ts`: scroll 40px/s via `requestAnimationFrame`; delay inicial de 4s; pausa 4s no fim; volta ao topo e repete; rolagem manual pausa 8s e retoma
+
+**Correções de proxy e timezone**
+- `proxy.ts`: adicionado `/tv` e `/api/tv` a PUBLIC_PATHS; redirect de usuário logado aplicado **apenas** a `/login` e `/signup` (não a `/tv`, que deve ser acessível mesmo autenticado)
+- Substituído `toISOString().slice(0,10)` por formatação local (`getFullYear/Month/Date`) em todos os cálculos de "hoje" — corrige bug D+1 que ocorria após as 21h no fuso UTC-3
+
+---
 
 ### 2026-05-11 — Auditoria Técnica: PWA Core, Offline Sync e Correções Críticas
 
